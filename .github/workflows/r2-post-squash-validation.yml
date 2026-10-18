@@ -1,0 +1,48 @@
+name: R2 post-squash validation
+
+on:
+  push:
+    branches:
+      - validation/r2-post-squash-665c31d
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact cleaned R2 head
+        uses: actions/checkout@v4
+        with:
+          ref: 665c31d1a5ba1355973989f73a149add64e45db7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.16'
+
+      - name: Install AutoGluon 1.5.0 and project dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv venv --python 3.13.16
+          uv pip install "autogluon.tabular[lightgbm,catboost,xgboost]==1.5.0" -e ".[test]"
+          uv run --no-sync python - <<'PY'
+          import sys
+          from importlib.metadata import version
+          print("PYTHON_VERSION", sys.version)
+          print("AUTOGLUON_TABULAR_VERSION", version("autogluon.tabular"))
+          assert sys.version.startswith("3.13.16")
+          assert version("autogluon.tabular") == "1.5.0"
+          PY
+
+      - name: Targeted R2 tests
+        run: |
+          uv run --no-sync pytest tests/test_classification_metrics.py
+          uv run --no-sync pytest tests/test_classification_training_metrics.py
+          uv run --no-sync pytest tests/test_remote_classification_metrics.py
+          uv run --no-sync pytest tests/test_fault_prediction.py
+
+      - name: Full repository suite
+        run: uv run --no-sync pytest tests/
