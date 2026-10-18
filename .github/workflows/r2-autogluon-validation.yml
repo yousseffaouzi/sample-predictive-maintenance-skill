@@ -1,0 +1,206 @@
+name: R2 AutoGluon validation
+
+on:
+  push:
+    branches:
+      - validation/r2-autogluon
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact R2 head
+        uses: actions/checkout@v4
+        with:
+          ref: bd03c390ea3e1e5ce8c4c6510760a2030176b99d
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv and project dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv venv --python 3.13
+          uv pip install "autogluon.tabular[lightgbm,catboost,xgboost]==1.5.0" -e ".[test]"
+          uv run --no-sync python - <<'PY'
+          import sys
+          import autogluon
+          import autogluon.tabular
+          print("PYTHON_VERSION", sys.version)
+          print("AUTOGLUON_VERSION", autogluon.__version__)
+          print("AUTOGLUON_TABULAR", autogluon.tabular.__file__)
+          PY
+
+      - name: Real AutoGluon API contract smoke
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+          from autogluon.tabular import TabularPredictor
+          from pdm.fault_prediction.metrics import evaluate_binary_classifier, positive_class_scores
+
+          def fit_case(labels, name):
+              n = len(labels)
+              x = np.linspace(-2.0, 2.0, n)
+              train = pd.DataFrame({"x": x, "x2": x ** 2, "target": labels})
+              path = Path(tempfile.mkdtemp()) / name
+              predictor = TabularPredictor(
+                  label="target", problem_type="binary", eval_metric="f1",
+                  path=str(path), verbosity=0,
+              ).fit(
+                  train_data=train,
+                  time_limit=20,
+                  presets="medium_quality",
+                  hyperparameters={"GBM": {}},
+              )
+              X = train.drop(columns=["target"])
+              raw = predictor.predict_proba(X, as_multiclass=False)
+              scores, positive = positive_class_scores(predictor, X)
+              print(name, "positive_class=", repr(predictor.positive_class))
+              print(name, "return_type=", type(raw).__module__ + "." + type(raw).__name__)
+              print(name, "shape=", getattr(raw, "shape", None), "ndim=", np.asarray(raw).ndim)
+              assert predictor.positive_class == positive
+              assert np.asarray(raw).ndim == 1
+              assert np.asarray(raw).shape == (n,)
+              assert scores.shape == (n,)
+              return predictor, train
+
+          p_num, df_num = fit_case(np.array([0] * 20 + [1] * 20), "numeric")
+          assert p_num.positive_class == 1
+
+          p_bool, df_bool = fit_case(np.array([False] * 20 + [True] * 20), "boolean")
+          assert p_bool.positive_class in (True, np.bool_(True))
+
+          X_num = df_num.drop(columns=["target"])
+          y_one_class = np.zeros(len(df_num), dtype=int)
+          one_class = evaluate_binary_classifier(p_num, X_num, y_one_class)
+          payload = json.dumps(one_class, allow_nan=False)
+          print("ONE_CLASS_METRICS", payload)
+          assert one_class["roc_auc"] is None
+          assert one_class["average_precision"] is None
+          assert '"roc_auc": null' in payload
+          assert '"average_precision": null' in payload
+          PY
+
+      - name: Real local train.py binary and multi-label paths
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          from types import SimpleNamespace
+          import numpy as np
+          import pandas as pd
+          from pdm.fault_prediction import train as training
+
+          root = Path(tempfile.mkdtemp())
+          base = np.linspace(-2.0, 2.0, 40)
+          binary = pd.DataFrame({"x": base, "x2": base**2, "machine_failure": [0]*20 + [1]*20})
+          args = SimpleNamespace(
+              output=root/"binary", time_limit=20, presets="medium_quality",
+              rebalance=False, smote=False, seed=42, warm_start=False,
+              skip_importance=True, workers=1,
+          )
+          args.output.mkdir()
+          metrics, _ = training.train_single(binary.iloc[:32].copy(), binary.iloc[32:].copy(), "classification", args)
+          print("LOCAL_BINARY", json.dumps(metrics, allow_nan=False))
+          for key in ("f1", "precision", "recall", "roc_auc", "average_precision"):
+              assert key in metrics
+
+          multi = pd.DataFrame({
+              "x": np.tile(np.arange(20), 2),
+              "label_a": [0]*10 + [1]*10 + [0]*10 + [1]*10,
+              "label_b": [0,1]*20,
+          })
+          args2 = SimpleNamespace(
+              output=root/"multi", time_limit=20, presets="medium_quality",
+              rebalance=False, skip_importance=True, workers=1,
+          )
+          args2.output.mkdir()
+          mmetrics, _ = training.train_multilabel(multi.copy(), multi.copy(), args2)
+          print("LOCAL_MULTILABEL", json.dumps(mmetrics, allow_nan=False))
+          assert "mean_test_roc_auc" in mmetrics
+          assert "mean_test_average_precision" in mmetrics
+          for value in mmetrics["labels"].values():
+              if "test_f1" in value:
+                  assert "test_roc_auc" in value
+                  assert "test_average_precision" in value
+          PY
+
+      - name: Real FailureClassifier path
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json
+          import numpy as np
+          import pandas as pd
+          from pdm.fault_prediction.model import FailureClassifier
+
+          n = 60
+          df = pd.DataFrame({
+              "sensor_a": np.linspace(-2, 2, n),
+              "sensor_b": np.sin(np.linspace(0, 6, n)),
+              "machine_failure": np.array([0]*30 + [1]*30),
+          })
+          model = FailureClassifier()
+          result = model.train(df.iloc[:48].copy(), df.iloc[48:].copy(), time_limit=20, presets="medium_quality", optimize_threshold=False)
+          print("FAILURE_CLASSIFIER", json.dumps(result.metrics, allow_nan=False, default=str))
+          per_label = result.metrics["per_label"]["machine_failure"]
+          assert "roc_auc" in per_label
+          assert "average_precision" in per_label
+          PY
+
+      - name: Real SageMaker binary and multi-label logic
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json
+          import os
+          import tempfile
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+          from pdm.remote import train_remote, train_multilabel
+
+          root = Path(tempfile.mkdtemp())
+          data = root/"binary_data"; data.mkdir()
+          model = root/"binary_model"; out = root/"output"
+          train = pd.DataFrame({"score": np.linspace(-2,2,40), "machine_failure": [0]*20+[1]*20})
+          test = pd.DataFrame({"score": [-1.5,-0.5,0.5,1.5], "machine_failure": [0,0,1,1]})
+          train.to_csv(data/"raw_train.csv", index=False); test.to_csv(data/"raw_test.csv", index=False)
+          os.environ["SM_HPS"] = json.dumps({"formulation":"classification","time-limit":20,"presets":"medium_quality"})
+          os.environ["SM_CHANNEL_TRAIN"] = str(data); os.environ["SM_MODEL_DIR"] = str(model); os.environ["SM_OUTPUT_DATA_DIR"] = str(out)
+          train_remote.main()
+          bm = json.loads((model/"metrics.json").read_text())
+          print("REMOTE_BINARY", json.dumps(bm, allow_nan=False))
+          assert "roc_auc" in bm and "average_precision" in bm
+
+          mdata = root/"multi_data"; mdata.mkdir(); mmodel = root/"multi_model"
+          mtrain = pd.DataFrame({"score": np.linspace(-2,2,40), "label_failure": [0]*20+[1]*20})
+          mtest = pd.DataFrame({"score": [-1.5,-0.5,0.5,1.5], "label_failure": [0,0,1,1]})
+          mtrain.to_csv(mdata/"train.csv", index=False); mtest.to_csv(mdata/"test.csv", index=False)
+          os.environ["SM_HPS"] = json.dumps({"time-limit":20,"presets":"medium_quality","workers":1})
+          os.environ["SM_CHANNEL_TRAIN"] = str(mdata); os.environ["SM_MODEL_DIR"] = str(mmodel)
+          train_multilabel.main()
+          mm = json.loads((mmodel/"metrics.json").read_text())
+          print("REMOTE_MULTILABEL", json.dumps(mm, allow_nan=False))
+          lm = mm["labels"]["label_failure"]
+          assert "test_roc_auc" in lm and "test_average_precision" in lm
+          PY
+
+      - name: Targeted R2 pytest modules
+        run: |
+          uv run --no-sync pytest tests/test_classification_metrics.py
+          uv run --no-sync pytest tests/test_classification_training_metrics.py
+          uv run --no-sync pytest tests/test_remote_classification_metrics.py
+          uv run --no-sync pytest tests/test_fault_prediction.py
+
+      - name: Full test suite
+        run: uv run --no-sync pytest tests/
