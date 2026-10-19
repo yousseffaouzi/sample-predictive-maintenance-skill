@@ -93,9 +93,8 @@ def run_smap(data_dir: Path, time_limit: int = 300) -> dict:
     normalization) which captures spectral anomalies critical for segment-based
     anomaly detection under point-adjust evaluation.
 
-    The spectral residual method computes per-feature FFT saliency, z-scores
-    against training distribution, and aggregates using a robust percentile.
-    This achieves F1~0.97 vs 0.73 for temporal PCA reconstruction.
+    The detector threshold is calibrated from normal training scores only.
+    Test labels are reserved for final point-adjust metric evaluation.
     """
     from sklearn.metrics import f1_score, precision_score, recall_score
     from pdm.anomaly_detection.spectral_residual import SpectralResidualDetector
@@ -103,13 +102,10 @@ def run_smap(data_dir: Path, time_limit: int = 300) -> dict:
     train_df = pd.read_csv(data_dir / "raw_train.csv")
     test_df = pd.read_csv(data_dir / "raw_test.csv")
 
-    # Determine contamination from test label ratio
-    anomaly_ratio = test_df["label"].mean()
-
     model = SpectralResidualDetector(
         sr_window=5,
         aggregation_percentile=95,
-        contamination=min(anomaly_ratio, 0.15),
+        contamination=0.10,
         scoring="percentile",
     )
     result = model.train(train_df, test_df, time_limit=time_limit)
