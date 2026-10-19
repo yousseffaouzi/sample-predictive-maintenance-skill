@@ -1,0 +1,25 @@
+name: Training robustness predictor stub validation
+
+on:
+  push:
+    branches:
+      - ci/training-robustness-fix-validation
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest pytest-timeout
+      - name: Run robustness tests
+        run: pytest tests/test_training_robustness.py -vv
+      - name: Run full repository suite
+        run: pytest tests/
