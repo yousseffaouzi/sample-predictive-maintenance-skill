@@ -90,7 +90,10 @@ def test_smap_benchmark_does_not_use_test_prevalence_for_contamination(
 
         def predict(self, features):
             predictions = pd.DataFrame(
-                {"is_anomaly": np.zeros(len(features), dtype=int)},
+                {
+                    "anomaly_score": np.linspace(0.0, 1.0, len(features)),
+                    "is_anomaly": np.zeros(len(features), dtype=int),
+                },
                 index=features.index,
             )
             return SimpleNamespace(predictions=predictions)
@@ -103,6 +106,7 @@ def test_smap_benchmark_does_not_use_test_prevalence_for_contamination(
         FakeSpectralResidualDetector,
     )
 
-    run_smap(tmp_path)
+    metrics = run_smap(tmp_path)
 
     assert observed_contamination == [0.10]
+    assert {"f1", "precision", "recall", "roc_auc", "average_precision"} <= metrics.keys()
