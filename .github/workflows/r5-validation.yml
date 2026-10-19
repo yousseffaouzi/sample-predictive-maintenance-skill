@@ -8,7 +8,7 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -16,19 +16,15 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install focused dependencies
+      - name: Install project dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install numpy pandas scikit-learn scipy joblib boto3 pytest pytest-timeout
-          python -m pip install -e . --no-deps
+          python -m pip install -e .
+          python -m pip install pytest pytest-timeout
 
-      - name: Run anomaly detection tests
+      - name: Run full repository test suite
         run: |
-          pytest \
-            tests/test_anomaly_threshold_leakage.py \
-            tests/test_temporal_anomaly.py \
-            tests/test_spectral_residual.py \
-            tests/test_anomaly_detection.py
+          pytest tests/
 
       - name: Download canonical SMAP benchmark data
         run: |
