@@ -13,10 +13,8 @@ patterns. This implementation uses:
 Key insight: The Spectral Residual highlights time points where the frequency
 content deviates from the local spectral average. For SMAP-style data where
 channels are concatenated, the global FFT captures periodic patterns unique to
-each channel's segment, making SR highly effective at detecting anomalous
-departures from normal periodicity.
-
-Performance: F1=0.97 on NASA SMAP (vs 0.73 for temporal PCA reconstruction).
+each channel's segment, making SR useful for detecting anomalous departures
+from normal periodicity.
 
 Reference: Ren, H. et al. "Time-Series Anomaly Detection Service at Microsoft"
 (SR-CNN), KDD 2019. Our implementation adds z-score normalization against
@@ -53,7 +51,8 @@ class SpectralResidualDetector(PDMModel):
         aggregation_percentile: Percentile (0-100) for aggregating per-feature
             z-scores into a single anomaly score per timestep. 95 is robust
             to noisy features while still catching localized anomalies.
-        contamination: Expected anomaly fraction (for fallback threshold).
+        contamination: Expected anomaly fraction used to select the threshold
+            from the normal training-score distribution.
         scoring: Legacy parameter for API compatibility ('max' or 'percentile').
     """
 
