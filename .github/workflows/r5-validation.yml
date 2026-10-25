@@ -1,0 +1,50 @@
+name: R5 threshold leakage validation
+
+on:
+  push:
+    branches:
+      - ci/r5-threshold-validation
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest pytest-timeout
+
+      - name: Run full repository test suite
+        run: |
+          pytest tests/
+
+      - name: Download canonical SMAP benchmark data
+        run: |
+          python -m pdm.benchmarks.download /tmp/pdm-benchmarks smap
+
+      - name: Run canonical SMAP regression gate
+        run: |
+          python -m pdm.benchmarks.benchmark /tmp/pdm-benchmarks smap
+
+      - name: Verify canonical SMAP metrics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from pdm.benchmarks.benchmark import run_smap
+
+          result = run_smap(Path("/tmp/pdm-benchmarks/smap"))
+          print("SMAP metrics:", result)
+          assert abs(result["f1"] - 0.4354914832453769) < 1e-9
+          assert abs(result["precision"] - 1.0) < 1e-12
+          assert abs(result["recall"] - 0.2783567354102677) < 1e-9
+          assert abs(result["roc_auc"] - 0.5466339831250037) < 1e-9
+          assert abs(result["average_precision"] - 0.1606059738748331) < 1e-9
+          PY
