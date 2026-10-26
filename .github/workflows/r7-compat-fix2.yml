@@ -1,0 +1,39 @@
+name: Complete R7 compatibility fix
+
+on:
+  push:
+    branches:
+      - automation/r7-compat-fix2
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/classification-operating-point-selection
+
+      - name: Reuse normalized priority in metrics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("pdm/fault_prediction/train.py")
+          text = p.read_text()
+          old = 'metrics["optimization_priority"] = normalize_optimization_priority(args.optimization_priority)'
+          new = 'metrics["optimization_priority"] = optimization_priority'
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one metrics priority match, found {text.count(old)}")
+          p.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - name: Commit fix
+        run: |
+          git config user.name "Youssef Faouzi"
+          git config user.email "46967695+yousseffaouzi@users.noreply.github.com"
+          git add pdm/fault_prediction/train.py
+          git commit -m "fix: reuse normalized classification priority"
+          git push origin HEAD:feat/classification-operating-point-selection
