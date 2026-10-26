@@ -15,6 +15,37 @@ from sklearn.metrics import (
 )
 
 
+OPTIMIZATION_METRICS = {
+    "balanced": "f1",
+    "recall": "recall",
+    "precision": "precision",
+}
+
+
+def normalize_optimization_priority(priority: str = "balanced") -> str:
+    """Normalize the user-facing classification optimization priority."""
+    normalized = str(priority).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {"f1": "balanced", "balanced_f1": "balanced"}
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in OPTIMIZATION_METRICS:
+        choices = ", ".join(OPTIMIZATION_METRICS)
+        raise ValueError(f"Unknown optimization priority {priority!r}; choose one of: {choices}")
+    return normalized
+
+
+def classification_eval_metric(priority: str = "balanced") -> str:
+    """Return the AutoGluon metric that matches the operating priority."""
+    return OPTIMIZATION_METRICS[normalize_optimization_priority(priority)]
+
+
+def predictor_decision_threshold(predictor) -> float:
+    """Return a validated binary decision threshold, defaulting to 0.5."""
+    threshold = float(getattr(predictor, "decision_threshold", 0.5))
+    if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"Invalid predictor decision threshold: {threshold}")
+    return threshold
+
+
 def binarize_labels(values, positive_class: Any) -> np.ndarray:
     """Map arbitrary binary labels to 0/1 using AutoGluon's positive class."""
     arr = np.asarray(values)
