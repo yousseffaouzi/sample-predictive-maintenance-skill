@@ -1,0 +1,76 @@
+name: Document R7 operating-point selection
+
+on:
+  push:
+    branches:
+      - automation/r7-docs
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/classification-operating-point-selection
+
+      - name: Update R7 documentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}\n--- pattern ---\n{old}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "SKILL.md",
+              '''4. **Optimization priority** — does the user prioritize recall (catch all failures), precision (minimize false alarms), or balanced F1? This affects training eval metric and threshold selection.\n''',
+              '''4. **Optimization priority** — does the user prioritize recall (catch all failures), precision (minimize false alarms), or balanced F1? For classification, this maps to F2 (recall-emphasis), F0.5 (precision-emphasis), or F1 (balanced). AutoGluon selects the binary decision threshold on its internal validation data for that objective; final test labels are evaluation-only.\n''',
+          )
+
+          replace_once(
+              "references/data-exploration.md",
+              '''- **Optimization priority** — does the user care more about recall (catching all failures), precision (minimizing false alarms), or balanced F1? This is an operational decision driven by maintenance capacity, safety criticality, and false-alarm tolerance. It affects the training eval metric and inference threshold selection.\n''',
+              '''- **Optimization priority** — does the user care more about recall (catching all failures), precision (minimizing false alarms), or balanced F1? This is an operational decision driven by maintenance capacity, safety criticality, and false-alarm tolerance. Classification maps these choices to F2, F0.5, and F1 respectively. The inference threshold is calibrated on AutoGluon's internal validation data for that objective; never use final test labels to select the threshold.\n''',
+          )
+
+          replace_once(
+              "pdm/README.md",
+              '''    --output ./experiments/00_baseline/model \\\n    --time-limit 120 \\\n    --presets best\n```\n''',
+              '''    --output ./experiments/00_baseline/model \\\n    --time-limit 120 \\\n    --presets best \\\n    --optimization-priority balanced\n```\n''',
+          )
+          replace_once(
+              "pdm/README.md",
+              '''| `--presets` | `best` | AutoGluon presets (`best`, `medium_quality`, etc.) |\n''',
+              '''| `--presets` | `best` | AutoGluon presets (`best`, `medium_quality`, etc.) |\n| `--optimization-priority` | `balanced` | Classification operating point: `balanced` → F1, `recall` → F2, `precision` → F0.5. AutoGluon calibrates the binary decision threshold on internal validation data. |\n''',
+          )
+
+          replace_once(
+              "references/artifacts.md",
+              '''| `metrics.json` | Classification metrics include F1, precision, recall, ROC AUC, and average precision; multi-label runs also include positive_rate and aggregate mean/median metrics. ROC AUC and average precision are `null` when a test split contains only one class. Optional: feature_importance. |\n''',
+              '''| `metrics.json` | Classification metrics include F1, precision, recall, ROC AUC, average precision, `optimization_priority`, `eval_metric`, and the validation-calibrated `decision_threshold`; multi-label runs include the same operating-point fields per label plus positive_rate and aggregate mean/median metrics. ROC AUC and average precision are `null` when a test split contains only one class. Optional: feature_importance. |\n''',
+          )
+
+          replace_once(
+              "examples/shell_compressor/skill-improvement-recommendations.md",
+              '''### R7 — Deliver the threshold selection the docs already promise\nPhase-2 item 4 ([SKILL.md:218](../../SKILL.md)) says the recall/precision/F1\noptimization priority "affects … threshold selection," but the classification\npipeline only ever reports metrics at the default 0.5 threshold — there is no\nthreshold selection step. Either implement operating-point selection (tie it to\nthe stated priority) or soften the doc. R2 provides the probabilities needed to\ndo the former.\n''',
+              '''### R7 — Deliver the threshold selection the docs already promise\n\n> **Status: implemented by this change.** Classification now maps balanced / recall / precision priorities to F1 / F2 / F0.5 objectives and uses AutoGluon's internal validation data to calibrate the deployable binary decision threshold. The selected threshold is persisted and reported in metrics; final test labels remain evaluation-only.\n\nPhase-2 item 4 ([SKILL.md:218](../../SKILL.md)) asks for an operating priority that affects both model selection and threshold selection. The implementation deliberately uses F2 and F0.5 for recall- and precision-emphasis instead of maximizing pure recall or precision, which can produce degenerate all-positive or almost-all-negative operating points.\n''',
+          )
+          PY
+
+          git diff --check
+
+      - name: Commit docs
+        run: |
+          git config user.name "Youssef Faouzi"
+          git config user.email "46967695+yousseffaouzi@users.noreply.github.com"
+          git add SKILL.md references pdm/README.md examples/shell_compressor/skill-improvement-recommendations.md
+          git commit -m "docs: document classification operating-point selection"
+          git push origin HEAD:feat/classification-operating-point-selection
