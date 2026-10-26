@@ -1,0 +1,259 @@
+name: Apply R7 operating-point patch
+
+on:
+  push:
+    branches:
+      - automation/r7-apply
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/classification-operating-point-selection
+          fetch-depth: 0
+
+      - name: Apply focused R7 changes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}\n--- pattern ---\n{old}")
+              p.write_text(text.replace(old, new, 1))
+
+          # Shared classification operating-point helpers.
+          replace_once(
+              "pdm/fault_prediction/metrics.py",
+              '''from sklearn.metrics import (\n    average_precision_score,\n    f1_score,\n    precision_score,\n    recall_score,\n    roc_auc_score,\n)\n\n\ndef binarize_labels(values, positive_class: Any) -> np.ndarray:\n''',
+              '''from sklearn.metrics import (\n    average_precision_score,\n    f1_score,\n    precision_score,\n    recall_score,\n    roc_auc_score,\n)\n\n\nOPTIMIZATION_METRICS = {\n    "balanced": "f1",\n    "recall": "recall",\n    "precision": "precision",\n}\n\n\ndef normalize_optimization_priority(priority: str = "balanced") -> str:\n    """Normalize the user-facing classification optimization priority."""\n    normalized = str(priority).strip().lower().replace("-", "_").replace(" ", "_")\n    aliases = {"f1": "balanced", "balanced_f1": "balanced"}\n    normalized = aliases.get(normalized, normalized)\n    if normalized not in OPTIMIZATION_METRICS:\n        choices = ", ".join(OPTIMIZATION_METRICS)\n        raise ValueError(f"Unknown optimization priority {priority!r}; choose one of: {choices}")\n    return normalized\n\n\ndef classification_eval_metric(priority: str = "balanced") -> str:\n    """Return the AutoGluon metric that matches the operating priority."""\n    return OPTIMIZATION_METRICS[normalize_optimization_priority(priority)]\n\n\ndef predictor_decision_threshold(predictor) -> float:\n    """Return a validated binary decision threshold, defaulting to 0.5."""\n    threshold = float(getattr(predictor, "decision_threshold", 0.5))\n    if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:\n        raise ValueError(f"Invalid predictor decision threshold: {threshold}")\n    return threshold\n\n\ndef binarize_labels(values, positive_class: Any) -> np.ndarray:\n''',
+          )
+
+          # FailureClassifier: remove test-label tuning and honor AutoGluon's validation threshold.
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''from autogluon.tabular import TabularPredictor\nfrom sklearn.metrics import f1_score\n\nfrom pdm.base import PDMModel, PredictionResult, TrainResult\nfrom pdm.fault_prediction.metrics import binarize_labels, compute_binary_metrics, positive_class_scores\n''',
+              '''from autogluon.tabular import TabularPredictor\n\nfrom pdm.base import PDMModel, PredictionResult, TrainResult\nfrom pdm.fault_prediction.metrics import (\n    binarize_labels,\n    classification_eval_metric,\n    compute_binary_metrics,\n    evaluate_binary_classifier,\n    normalize_optimization_priority,\n    positive_class_scores,\n    predictor_decision_threshold,\n)\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''\n\ndef _optimize_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:\n    """Find classification threshold that maximizes F1 on validation data.\n\n    Searches thresholds from 0.1 to 0.9 in steps of 0.02.\n\n    Returns:\n        Optimal threshold value\n    """\n    best_f1, best_thresh = 0.0, 0.5\n    for thresh in np.arange(0.10, 0.91, 0.02):\n        preds = (y_proba >= thresh).astype(int)\n        f1 = f1_score(y_true, preds, zero_division=0)\n        if f1 > best_f1:\n            best_f1, best_thresh = f1, float(thresh)\n    return best_thresh\n\n\nclass FailureClassifier(PDMModel):\n''',
+              '''\n\nclass FailureClassifier(PDMModel):\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''    Options:\n      - use_smote (bool, default True): Apply SMOTE when positive rate < 10%\n      - optimize_threshold (bool, default True): Find F1-optimal classification threshold\n''',
+              '''    Options:\n      - use_smote (bool, default False): Apply SMOTE when positive rate < 10%\n      - optimization_priority (str, default "balanced"): balanced, recall, or precision\n      - optimize_threshold (bool, optional): Backward-compatible control for AutoGluon's\n        validation-only decision-threshold calibration. Test labels are never used.\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''            use_smote: Apply SMOTE for imbalanced labels (default True)\n            optimize_threshold: Find F1-optimal threshold (default True)\n        """\n        time_limit = kwargs.get("time_limit", 600)\n        presets = kwargs.get("presets", "best")\n        output = Path(kwargs.get("output", "./model"))\n        use_smote = kwargs.get("use_smote", False)\n        optimize_threshold = kwargs.get("optimize_threshold", False)\n''',
+              '''            use_smote: Apply SMOTE for imbalanced labels (default False)\n            optimization_priority: balanced, recall, or precision (default "balanced")\n            optimize_threshold: Optional legacy switch. If provided, controls AutoGluon's\n                validation-only calibration; it never tunes on ``test_df``.\n        """\n        time_limit = kwargs.get("time_limit", 600)\n        presets = kwargs.get("presets", "best")\n        output = Path(kwargs.get("output", "./model"))\n        use_smote = kwargs.get("use_smote", False)\n        optimization_priority = normalize_optimization_priority(\n            kwargs.get("optimization_priority", "balanced")\n        )\n        eval_metric = classification_eval_metric(optimization_priority)\n        legacy_optimize_threshold = kwargs.get("optimize_threshold") if "optimize_threshold" in kwargs else None\n        calibrate_decision_threshold = (\n            "auto" if legacy_optimize_threshold is None else bool(legacy_optimize_threshold)\n        )\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''            predictor = TabularPredictor(\n                label=label, eval_metric="f1", problem_type="binary",\n                path=str(output / "ag_model" / label.replace(" ", "_")),\n                verbosity=0,\n            ).fit(train_data=train_input, time_limit=time_limit, presets=presets)\n\n            # Threshold optimization\n            threshold = 0.5\n            if optimize_threshold:\n                try:\n                    y_proba, positive_class = positive_class_scores(predictor, test_df[self.feature_names])\n                    y_true_binary = binarize_labels(test_df[label].values, positive_class)\n                    threshold = _optimize_threshold(y_true_binary, y_proba)\n                except Exception:\n                    threshold = 0.5\n            self.thresholds[label] = threshold\n\n            # Evaluate with optimized threshold\n            y_true = test_df[label].values\n            try:\n                y_proba, positive_class = positive_class_scores(predictor, test_df[self.feature_names])\n                y_true_binary = binarize_labels(y_true, positive_class)\n                y_pred_binary = (y_proba >= threshold).astype(int)\n                cls_metrics = compute_binary_metrics(y_true_binary, y_pred_binary, y_proba)\n            except Exception:\n                y_pred = predictor.predict(test_df[self.feature_names]).values\n                positive_class = getattr(predictor, "positive_class", 1)\n                cls_metrics = compute_binary_metrics(\n                    binarize_labels(y_true, positive_class),\n                    binarize_labels(y_pred, positive_class),\n                )\n''',
+              '''            predictor = TabularPredictor(\n                label=label, eval_metric=eval_metric, problem_type="binary",\n                path=str(output / "ag_model" / label.replace(" ", "_")),\n                verbosity=0,\n            ).fit(\n                train_data=train_input,\n                time_limit=time_limit,\n                presets=presets,\n                calibrate_decision_threshold=calibrate_decision_threshold,\n            )\n\n            # AutoGluon calibrates this threshold on its validation data. Test labels\n            # are evaluation-only and must never influence the deployable threshold.\n            threshold = predictor_decision_threshold(predictor)\n            self.thresholds[label] = threshold\n\n            y_true = test_df[label].values\n            try:\n                y_pred = predictor.predict(test_df[self.feature_names])\n                cls_metrics = evaluate_binary_classifier(\n                    predictor, test_df[self.feature_names], y_true, y_pred=y_pred\n                )\n            except Exception:\n                y_pred = predictor.predict(test_df[self.feature_names]).values\n                positive_class = getattr(predictor, "positive_class", 1)\n                cls_metrics = compute_binary_metrics(\n                    binarize_labels(y_true, positive_class),\n                    binarize_labels(y_pred, positive_class),\n                )\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''                "threshold": round(threshold, 3),\n                "smote_applied": use_smote and train_df[label].mean() < 0.10,\n''',
+              '''                "threshold": round(threshold, 6),\n                "decision_threshold": round(threshold, 6),\n                "optimization_priority": optimization_priority,\n                "eval_metric": eval_metric,\n                "smote_applied": use_smote and train_df[label].mean() < 0.10,\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''            metadata={"formulation": self.formulation, "feature_names": self.feature_names, "label_names": self.label_names},\n''',
+              '''            metadata={\n                "formulation": self.formulation,\n                "feature_names": self.feature_names,\n                "label_names": self.label_names,\n                "optimization_priority": optimization_priority,\n                "eval_metric": eval_metric,\n            },\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''    def predict(self, features: pd.DataFrame) -> PredictionResult:\n        """Predict failure labels with probabilities using optimized thresholds."""\n        X = features.reindex(columns=self.feature_names, fill_value=0)\n        results = {}\n        for label, predictor in self.predictors.items():\n            threshold = self.thresholds.get(label, 0.5)\n            try:\n                y_proba, _ = positive_class_scores(predictor, X)\n                results[f"{label}_pred"] = (y_proba >= threshold).astype(int)\n                results[f"{label}_proba"] = y_proba\n            except Exception:\n                results[f"{label}_pred"] = predictor.predict(X).values\n        return PredictionResult(predictions=pd.DataFrame(results, index=features.index))\n''',
+              '''    def predict(self, features: pd.DataFrame) -> PredictionResult:\n        """Predict failure labels with probabilities using the calibrated thresholds."""\n        X = features.reindex(columns=self.feature_names, fill_value=0)\n        results = {}\n        for label, predictor in self.predictors.items():\n            threshold = self.thresholds.get(label, predictor_decision_threshold(predictor))\n            try:\n                y_proba, _ = positive_class_scores(predictor, X)\n                # Match AutoGluon's binary conversion rule: positive when p > threshold.\n                results[f"{label}_pred"] = (y_proba > threshold).astype(int)\n                results[f"{label}_proba"] = y_proba\n            except Exception:\n                results[f"{label}_pred"] = predictor.predict(X).values\n        return PredictionResult(predictions=pd.DataFrame(results, index=features.index))\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/model.py",
+              '''            if label_dir.exists():\n                obj.predictors[label] = TabularPredictor.load(str(label_dir), verbosity=0)\n        return obj\n''',
+              '''            if label_dir.exists():\n                predictor = TabularPredictor.load(str(label_dir), verbosity=0)\n                obj.predictors[label] = predictor\n                if label not in obj.thresholds:\n                    obj.thresholds[label] = predictor_decision_threshold(predictor)\n        return obj\n''',
+          )
+
+          # Local CLI: map operating priority to AutoGluon metric and expose threshold.
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''from pdm.fault_prediction.metrics import evaluate_binary_classifier\n''',
+              '''from pdm.fault_prediction.metrics import (\n    classification_eval_metric,\n    evaluate_binary_classifier,\n    normalize_optimization_priority,\n    predictor_decision_threshold,\n)\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''def _train_single_label(label, feature_cols, train_df, test_df, output_dir, time_limit, presets, rebalance=False, skip_importance=False):\n''',
+              '''def _train_single_label(label, feature_cols, train_df, test_df, output_dir, time_limit, presets, rebalance=False, skip_importance=False, optimization_priority="balanced"):\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''    predictor = TabularPredictor(\n        label=label, eval_metric="f1", problem_type="binary",\n        path=str(output_dir / "ag_model" / label.replace(" ", "_")),\n        sample_weight=sample_weight_col,\n        verbosity=0,\n    ).fit(train_data=train_label_df, time_limit=time_limit, presets=presets)\n''',
+              '''    optimization_priority = normalize_optimization_priority(optimization_priority)\n    eval_metric = classification_eval_metric(optimization_priority)\n    predictor = TabularPredictor(\n        label=label, eval_metric=eval_metric, problem_type="binary",\n        path=str(output_dir / "ag_model" / label.replace(" ", "_")),\n        sample_weight=sample_weight_col,\n        verbosity=0,\n    ).fit(train_data=train_label_df, time_limit=time_limit, presets=presets)\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''        "positive_rate": round(pos_rate, 5),\n        "n_positives_train": n_pos, "best_model": predictor.model_best,\n''',
+              '''        "positive_rate": round(pos_rate, 5),\n        "optimization_priority": optimization_priority,\n        "eval_metric": eval_metric,\n        "decision_threshold": round(predictor_decision_threshold(predictor), 6),\n        "n_positives_train": n_pos, "best_model": predictor.model_best,\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''    metrics = {"formulation": "multi-label classification", "labels": {}}\n''',
+              '''    optimization_priority = normalize_optimization_priority(args.optimization_priority)\n    metrics = {\n        "formulation": "multi-label classification",\n        "optimization_priority": optimization_priority,\n        "eval_metric": classification_eval_metric(optimization_priority),\n        "labels": {},\n    }\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''                    args.output, args.time_limit, args.presets, args.rebalance,\n                    args.skip_importance\n''',
+              '''                    args.output, args.time_limit, args.presets, args.rebalance,\n                    args.skip_importance, optimization_priority\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''                args.output, args.time_limit, args.presets, args.rebalance,\n                args.skip_importance\n''',
+              '''                args.output, args.time_limit, args.presets, args.rebalance,\n                args.skip_importance, optimization_priority\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''    eval_metric = "f1" if formulation == "classification" else "root_mean_squared_error"\n''',
+              '''    eval_metric = (\n        classification_eval_metric(args.optimization_priority)\n        if formulation == "classification"\n        else "root_mean_squared_error"\n    )\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''        metrics.update(cls_metrics)\n        print(f"  F1: {metrics['f1']:.4f} | Precision: {metrics['precision']:.4f} | Recall: {metrics['recall']:.4f}")\n''',
+              '''        metrics.update(cls_metrics)\n        metrics["optimization_priority"] = normalize_optimization_priority(args.optimization_priority)\n        metrics["decision_threshold"] = round(predictor_decision_threshold(predictor), 6)\n        print(f"  F1: {metrics['f1']:.4f} | Precision: {metrics['precision']:.4f} | Recall: {metrics['recall']:.4f}")\n        print(f"  Decision threshold: {metrics['decision_threshold']:.6f} ({metrics['optimization_priority']} priority)")\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''    parser.add_argument("--skip-importance", action="store_true", help="Skip permutation feature importance (saves ~60%% of total time for best_quality)")\n''',
+              '''    parser.add_argument("--skip-importance", action="store_true", help="Skip permutation feature importance (saves ~60%% of total time for best_quality)")\n    parser.add_argument(\n        "--optimization-priority",\n        choices=["balanced", "recall", "precision"],\n        default="balanced",\n        help="Classification operating priority; selects AutoGluon metric and validation-calibrated threshold",\n    )\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''        {"time_limit": args.time_limit, "presets": args.presets}, indent=2\n''',
+              '''        {\n            "time_limit": args.time_limit,\n            "presets": args.presets,\n            "optimization_priority": args.optimization_priority,\n        }, indent=2\n''',
+          )
+          replace_once(
+              "pdm/fault_prediction/train.py",
+              '''            print(f"  ROC AUC: {roc_auc} | Average Precision: {avg_precision}")\n''',
+              '''            print(f"  ROC AUC: {roc_auc} | Average Precision: {avg_precision}")\n            print(f"  Decision threshold: {metrics.get('decision_threshold', 0.5):.6f}")\n''',
+          )
+
+          # SageMaker binary path.
+          replace_once(
+              "pdm/remote/train_remote.py",
+              '''    n_trials = int(hps.get("n-trials", 50))\n\n    print(f"Formulation: {formulation}, Backend: {backend}")\n''',
+              '''    n_trials = int(hps.get("n-trials", 50))\n    optimization_priority = hps.get("optimization-priority", "balanced")\n\n    print(f"Formulation: {formulation}, Backend: {backend}")\n''',
+          )
+          replace_once(
+              "pdm/remote/train_remote.py",
+              '''        from pdm.fault_prediction.metrics import evaluate_binary_classifier\n        target = "machine_failure"\n        predictor = TabularPredictor(\n            label=target, eval_metric="f1", problem_type="binary",\n''',
+              '''        from pdm.fault_prediction.metrics import (\n            classification_eval_metric,\n            evaluate_binary_classifier,\n            normalize_optimization_priority,\n            predictor_decision_threshold,\n        )\n        target = "machine_failure"\n        optimization_priority = normalize_optimization_priority(optimization_priority)\n        eval_metric = classification_eval_metric(optimization_priority)\n        predictor = TabularPredictor(\n            label=target, eval_metric=eval_metric, problem_type="binary",\n''',
+          )
+          replace_once(
+              "pdm/remote/train_remote.py",
+              '''            "average_precision": None if cls_metrics["average_precision"] is None else round(float(cls_metrics["average_precision"]), 4),\n        }\n''',
+              '''            "average_precision": None if cls_metrics["average_precision"] is None else round(float(cls_metrics["average_precision"]), 4),\n            "optimization_priority": optimization_priority,\n            "eval_metric": eval_metric,\n            "decision_threshold": round(predictor_decision_threshold(predictor), 6),\n        }\n''',
+          )
+
+          # SageMaker multi-label path.
+          replace_once(
+              "pdm/remote/train_multilabel.py",
+              '''    workers = int(hps.get("workers", 1))\n\n    print(f"Experiment: {experiment_name}, Time/label: {time_limit}s, Presets: {presets}, Workers: {workers}")\n''',
+              '''    workers = int(hps.get("workers", 1))\n    optimization_priority = hps.get("optimization-priority", "balanced")\n\n    print(f"Experiment: {experiment_name}, Time/label: {time_limit}s, Presets: {presets}, Workers: {workers}")\n''',
+          )
+          replace_once(
+              "pdm/remote/train_multilabel.py",
+              '''    from autogluon.tabular import TabularPredictor\n    from pdm.fault_prediction.metrics import evaluate_binary_classifier\n\n    metrics = {"formulation": "multi-label classification", "experiment": experiment_name, "labels": {}}\n''',
+              '''    from autogluon.tabular import TabularPredictor\n    from pdm.fault_prediction.metrics import (\n        classification_eval_metric,\n        evaluate_binary_classifier,\n        normalize_optimization_priority,\n        predictor_decision_threshold,\n    )\n\n    optimization_priority = normalize_optimization_priority(optimization_priority)\n    eval_metric = classification_eval_metric(optimization_priority)\n    metrics = {\n        "formulation": "multi-label classification",\n        "experiment": experiment_name,\n        "optimization_priority": optimization_priority,\n        "eval_metric": eval_metric,\n        "labels": {},\n    }\n''',
+          )
+          replace_once(
+              "pdm/remote/train_multilabel.py",
+              '''        predictor = TabularPredictor(\n            label=label, eval_metric="f1", problem_type="binary",\n''',
+              '''        predictor = TabularPredictor(\n            label=label, eval_metric=eval_metric, problem_type="binary",\n''',
+          )
+          replace_once(
+              "pdm/remote/train_multilabel.py",
+              '''            "positive_rate": round(pos_rate, 5),\n            "best_model": predictor.model_best, "top_features": top_feats,\n''',
+              '''            "positive_rate": round(pos_rate, 5),\n            "optimization_priority": optimization_priority,\n            "eval_metric": eval_metric,\n            "decision_threshold": round(predictor_decision_threshold(predictor), 6),\n            "best_model": predictor.model_best, "top_features": top_feats,\n''',
+          )
+
+          # Parallel SageMaker experiment dispatcher propagates the priority.
+          replace_once(
+              "pdm/remote/parallel.py",
+              '''            hp.update({"experiment-name": name, "time-limit": str(exp.get("time-limit", 120)),\n                       "presets": exp.get("presets", "best")})\n''',
+              '''            hp.update({\n                "experiment-name": name,\n                "time-limit": str(exp.get("time-limit", 120)),\n                "presets": exp.get("presets", "best"),\n                "optimization-priority": exp.get("optimization-priority", "balanced"),\n            })\n''',
+          )
+          replace_once(
+              "pdm/remote/parallel.py",
+              '''                       "backend": exp.get("backend", "optuna"),\n                       "n-trials": str(exp.get("n-trials", 50))})\n''',
+              '''                       "backend": exp.get("backend", "optuna"),\n                       "n-trials": str(exp.get("n-trials", 50))})\n            if formulation == "classification":\n                hp["optimization-priority"] = exp.get("optimization-priority", "balanced")\n''',
+          )
+
+          # Existing regression tests: teach stubs the AutoGluon threshold contract.
+          replace_once(
+              "tests/test_classification_training_metrics.py",
+              '''class _FakePredictor:\n    positive_class = 1\n    model_best = "FakeModel"\n''',
+              '''class _FakePredictor:\n    positive_class = 1\n    model_best = "FakeModel"\n    decision_threshold = 0.37\n''',
+          )
+          replace_once(
+              "tests/test_classification_training_metrics.py",
+              '''        skip_importance=True,\n        workers=1,\n''',
+              '''        skip_importance=True,\n        workers=1,\n        optimization_priority="balanced",\n''',
+          )
+          replace_once(
+              "tests/test_classification_training_metrics.py",
+              '''    assert metrics["average_precision"] == pytest.approx(1.0)\n''',
+              '''    assert metrics["average_precision"] == pytest.approx(1.0)\n    assert metrics["optimization_priority"] == "balanced"\n    assert metrics["decision_threshold"] == pytest.approx(0.37)\n''',
+          )
+          replace_once(
+              "tests/test_classification_training_metrics.py",
+              '''    assert result["test_average_precision"] == pytest.approx(1.0)\n''',
+              '''    assert result["test_average_precision"] == pytest.approx(1.0)\n    assert result["optimization_priority"] == "balanced"\n    assert result["decision_threshold"] == pytest.approx(0.37)\n''',
+          )
+
+          replace_once(
+              "tests/test_remote_classification_metrics.py",
+              '''class _FakePredictor:\n    positive_class = 1\n    model_best = "FakeModel"\n''',
+              '''class _FakePredictor:\n    positive_class = 1\n    model_best = "FakeModel"\n    decision_threshold = 0.37\n''',
+          )
+          replace_once(
+              "tests/test_remote_classification_metrics.py",
+              '''    monkeypatch.setenv("SM_HPS", json.dumps({"formulation": "classification", "time-limit": 1}))\n''',
+              '''    monkeypatch.setenv(\n        "SM_HPS",\n        json.dumps({\n            "formulation": "classification",\n            "time-limit": 1,\n            "optimization-priority": "recall",\n        }),\n    )\n''',
+          )
+          replace_once(
+              "tests/test_remote_classification_metrics.py",
+              '''    assert metrics["average_precision"] == pytest.approx(1.0)\n''',
+              '''    assert metrics["average_precision"] == pytest.approx(1.0)\n    assert metrics["optimization_priority"] == "recall"\n    assert metrics["eval_metric"] == "recall"\n    assert metrics["decision_threshold"] == pytest.approx(0.37)\n''',
+          )
+          replace_once(
+              "tests/test_remote_classification_metrics.py",
+              '''        json.dumps({"time-limit": 1, "presets": "medium_quality", "workers": 1}),\n''',
+              '''        json.dumps({\n            "time-limit": 1,\n            "presets": "medium_quality",\n            "workers": 1,\n            "optimization-priority": "precision",\n        }),\n''',
+          )
+          replace_once(
+              "tests/test_remote_classification_metrics.py",
+              '''    assert metrics["mean_test_average_precision"] == pytest.approx(1.0)\n\n    output = capsys.readouterr().out\n''',
+              '''    assert metrics["mean_test_average_precision"] == pytest.approx(1.0)\n    assert metrics["optimization_priority"] == "precision"\n    assert label_metrics["eval_metric"] == "precision"\n    assert label_metrics["decision_threshold"] == pytest.approx(0.37)\n\n    output = capsys.readouterr().out\n''',
+          )
+
+          # New regression coverage: priority mapping + test-label independence.
+          Path("tests/test_classification_operating_point.py").write_text('''"""Regression coverage for validation-only classification operating points."""\n\nimport pandas as pd\nimport pytest\n\nfrom pdm.fault_prediction import model as model_module\nfrom pdm.fault_prediction.metrics import (\n    classification_eval_metric,\n    normalize_optimization_priority,\n)\n\n\nclass _CalibratingPredictor:\n    positive_class = 1\n    model_best = "FakeModel"\n    created = []\n\n    def __init__(self, **kwargs):\n        self.kwargs = kwargs\n        self.decision_threshold = 0.5\n        self.fit_calibration = None\n        type(self).created.append(self)\n\n    def fit(self, train_data, time_limit=None, presets=None, calibrate_decision_threshold="auto"):\n        self.fit_calibration = calibrate_decision_threshold\n        self.decision_threshold = {"f1": 0.41, "recall": 0.23, "precision": 0.79}[self.kwargs["eval_metric"]]\n        return self\n\n    def predict_proba(self, features, as_multiclass=True):\n        assert as_multiclass is False\n        return pd.Series(features["score"].astype(float).values, index=features.index)\n\n    def predict(self, features):\n        return (features["score"].astype(float) > self.decision_threshold).astype(int)\n\n\ndef _frames():\n    train = pd.DataFrame({\n        "score": [0.05, 0.10, 0.15, 0.20, 0.80, 0.85, 0.90, 0.95, 0.12, 0.88] * 2,\n        "machine_failure": [0, 0, 0, 0, 1, 1, 1, 1, 0, 1] * 2,\n    })\n    test = pd.DataFrame({\n        "score": [0.10, 0.30, 0.70, 0.90],\n        "machine_failure": [0, 0, 1, 1],\n    })\n    return train, test\n\n\n@pytest.mark.parametrize(\n    ("priority", "normalized", "metric"),\n    [\n        ("balanced", "balanced", "f1"),\n        ("f1", "balanced", "f1"),\n        ("balanced-f1", "balanced", "f1"),\n        ("recall", "recall", "recall"),\n        ("precision", "precision", "precision"),\n    ],\n)\ndef test_priority_mapping(priority, normalized, metric):\n    assert normalize_optimization_priority(priority) == normalized\n    assert classification_eval_metric(priority) == metric\n\n\ndef test_unknown_priority_is_rejected():\n    with pytest.raises(ValueError, match="Unknown optimization priority"):\n        classification_eval_metric("accuracy")\n\n\ndef test_failure_classifier_uses_validation_calibrated_threshold(monkeypatch, tmp_path):\n    _CalibratingPredictor.created.clear()\n    monkeypatch.setattr(model_module, "TabularPredictor", _CalibratingPredictor)\n    train, test = _frames()\n\n    model = model_module.FailureClassifier()\n    result = model.train(\n        train,\n        test,\n        time_limit=1,\n        output=tmp_path,\n        optimization_priority="recall",\n    )\n\n    predictor = _CalibratingPredictor.created[-1]\n    metrics = result.metrics["per_label"]["machine_failure"]\n    assert predictor.kwargs["eval_metric"] == "recall"\n    assert predictor.fit_calibration == "auto"\n    assert model.thresholds["machine_failure"] == pytest.approx(0.23)\n    assert metrics["decision_threshold"] == pytest.approx(0.23)\n    assert metrics["optimization_priority"] == "recall"\n\n\ndef test_legacy_threshold_switch_never_tunes_on_test_labels(monkeypatch, tmp_path):\n    _CalibratingPredictor.created.clear()\n    monkeypatch.setattr(model_module, "TabularPredictor", _CalibratingPredictor)\n    train, test = _frames()\n    flipped = test.copy()\n    flipped["machine_failure"] = 1 - flipped["machine_failure"]\n\n    first = model_module.FailureClassifier()\n    first.train(\n        train, test, time_limit=1, output=tmp_path / "first",\n        optimization_priority="precision", optimize_threshold=True,\n    )\n    second = model_module.FailureClassifier()\n    second.train(\n        train, flipped, time_limit=1, output=tmp_path / "second",\n        optimization_priority="precision", optimize_threshold=True,\n    )\n\n    assert first.thresholds["machine_failure"] == pytest.approx(0.79)\n    assert second.thresholds["machine_failure"] == pytest.approx(0.79)\n    assert _CalibratingPredictor.created[-2].fit_calibration is True\n    assert _CalibratingPredictor.created[-1].fit_calibration is True\n\n\ndef test_predict_uses_stored_operating_threshold(monkeypatch, tmp_path):\n    _CalibratingPredictor.created.clear()\n    monkeypatch.setattr(model_module, "TabularPredictor", _CalibratingPredictor)\n    train, test = _frames()\n    model = model_module.FailureClassifier()\n    model.train(\n        train, test, time_limit=1, output=tmp_path, optimization_priority="recall"\n    )\n\n    predictions = model.predict(pd.DataFrame({"score": [0.20, 0.24]})).predictions\n    assert predictions["machine_failure_pred"].tolist() == [0, 1]\n''')
+          PY
+
+      - name: Commit feature changes
+        run: |
+          git config user.name "Youssef Faouzi"
+          git config user.email "46967695+yousseffaouzi@users.noreply.github.com"
+          git add pdm tests
+          git diff --cached --check
+          git commit -m "feat: select classification operating point by priority"
+          git push origin HEAD:feat/classification-operating-point-selection
