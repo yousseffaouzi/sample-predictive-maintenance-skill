@@ -1,0 +1,92 @@
+name: R7 classification operating-point validation
+
+on:
+  push:
+    branches:
+      - ci/r7-operating-point-validation
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest pytest-timeout
+
+      - name: Run R7 regression tests
+        run: |
+          pytest -q \
+            tests/test_classification_operating_point.py \
+            tests/test_classification_training_metrics.py \
+            tests/test_remote_classification_metrics.py \
+            tests/test_fault_prediction.py \
+            tests/test_training_robustness.py
+
+      - name: Run full repository suite
+        run: pytest -q tests/
+
+      - name: Real AutoGluon operating-point smoke
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+          from pdm.fault_prediction.model import FailureClassifier
+
+          rng = np.random.default_rng(42)
+          n = 420
+          x = rng.normal(size=n)
+          z = rng.normal(size=n)
+          score = 1.6 * x + 0.5 * z + rng.normal(scale=1.0, size=n)
+          y = (score > np.quantile(score, 0.82)).astype(int)
+          df = pd.DataFrame({"x": x, "z": z, "machine_failure": y})
+          train = df.iloc[:320].reset_index(drop=True)
+          test = df.iloc[320:].reset_index(drop=True)
+
+          expected_metrics = {
+              "balanced": "f1",
+              "recall": "f2",
+              "precision": "f0.5",
+          }
+          results = {}
+          for priority in ("balanced", "recall", "precision"):
+              out = Path("/tmp") / f"r7-{priority}"
+              model = FailureClassifier()
+              result = model.train(
+                  train,
+                  test,
+                  time_limit=10,
+                  presets="medium_quality",
+                  output=out,
+                  optimization_priority=priority,
+              )
+              predictor = model.predictors["machine_failure"]
+              metrics = result.metrics["per_label"]["machine_failure"]
+              results[priority] = {
+                  "eval_metric": metrics["eval_metric"],
+                  "threshold": model.thresholds["machine_failure"],
+                  "predictor_threshold": float(predictor.decision_threshold),
+                  "f1": metrics["f1"],
+                  "precision": metrics["precision"],
+                  "recall": metrics["recall"],
+              }
+              assert metrics["eval_metric"] == expected_metrics[priority]
+              assert model.thresholds["machine_failure"] == float(predictor.decision_threshold)
+              assert metrics["decision_threshold"] == round(float(predictor.decision_threshold), 6)
+              assert 0.0 <= model.thresholds["machine_failure"] <= 1.0
+
+          print("OPERATING_POINT_RESULTS=" + json.dumps(results, sort_keys=True))
+          # Priority should influence the operating point on this deterministic fixture.
+          assert results["recall"]["recall"] >= results["balanced"]["recall"]
+          assert results["precision"]["precision"] >= results["balanced"]["precision"]
+          PY
