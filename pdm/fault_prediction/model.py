@@ -11,6 +11,7 @@ from pdm.base import PDMModel, PredictionResult, TrainResult
 from pdm.fault_prediction.metrics import (
     binarize_labels,
     classification_eval_metric,
+    classification_eval_metric_name,
     compute_binary_metrics,
     evaluate_binary_classifier,
     normalize_optimization_priority,
@@ -98,6 +99,7 @@ class FailureClassifier(PDMModel):
             kwargs.get("optimization_priority", "balanced")
         )
         eval_metric = classification_eval_metric(optimization_priority)
+        eval_metric_name = classification_eval_metric_name(optimization_priority)
         legacy_optimize_threshold = kwargs.get("optimize_threshold") if "optimize_threshold" in kwargs else None
         calibrate_decision_threshold = (
             "auto" if legacy_optimize_threshold is None else bool(legacy_optimize_threshold)
@@ -166,7 +168,7 @@ class FailureClassifier(PDMModel):
                 "threshold": round(threshold, 6),
                 "decision_threshold": round(threshold, 6),
                 "optimization_priority": optimization_priority,
-                "eval_metric": eval_metric,
+                "eval_metric": eval_metric_name,
                 "smote_applied": use_smote and train_df[label].mean() < 0.10,
             }
             self.predictors[label] = predictor
@@ -196,7 +198,7 @@ class FailureClassifier(PDMModel):
                 "feature_names": self.feature_names,
                 "label_names": self.label_names,
                 "optimization_priority": optimization_priority,
-                "eval_metric": eval_metric,
+                "eval_metric": eval_metric_name,
             },
         )
 

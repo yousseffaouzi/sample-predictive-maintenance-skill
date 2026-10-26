@@ -6,6 +6,7 @@ import pytest
 from pdm.fault_prediction import model as model_module
 from pdm.fault_prediction.metrics import (
     classification_eval_metric,
+    classification_eval_metric_name,
     normalize_optimization_priority,
 )
 
@@ -23,7 +24,8 @@ class _CalibratingPredictor:
 
     def fit(self, train_data, time_limit=None, presets=None, calibrate_decision_threshold="auto"):
         self.fit_calibration = calibrate_decision_threshold
-        self.decision_threshold = {"f1": 0.41, "recall": 0.23, "precision": 0.79}[self.kwargs["eval_metric"]]
+        metric_name = getattr(self.kwargs["eval_metric"], "name", self.kwargs["eval_metric"])
+        self.decision_threshold = {"f1": 0.41, "f2": 0.23, "f0.5": 0.79}[metric_name]
         return self
 
     def predict_proba(self, features, as_multiclass=True):
@@ -52,18 +54,28 @@ def _frames():
         ("balanced", "balanced", "f1"),
         ("f1", "balanced", "f1"),
         ("balanced-f1", "balanced", "f1"),
-        ("recall", "recall", "recall"),
-        ("precision", "precision", "precision"),
+        ("recall", "recall", "f2"),
+        ("precision", "precision", "f0.5"),
     ],
 )
 def test_priority_mapping(priority, normalized, metric):
     assert normalize_optimization_priority(priority) == normalized
-    assert classification_eval_metric(priority) == metric
+    assert classification_eval_metric_name(priority) == metric
+    scorer = classification_eval_metric(priority)
+    assert getattr(scorer, "name", scorer) == metric
 
 
 def test_unknown_priority_is_rejected():
     with pytest.raises(ValueError, match="Unknown optimization priority"):
         classification_eval_metric("accuracy")
+
+
+def test_priority_scorers_bias_without_degenerate_objectives():
+    y_true = [1, 1, 1, 1, 0, 0, 0, 0]
+    precision_heavy = [1, 1, 0, 0, 0, 0, 0, 0]
+    recall_heavy = [1, 1, 1, 1, 1, 1, 0, 0]
+    assert classification_eval_metric("recall")(y_true, recall_heavy) > classification_eval_metric("recall")(y_true, precision_heavy)
+    assert classification_eval_metric("precision")(y_true, precision_heavy) > classification_eval_metric("precision")(y_true, recall_heavy)
 
 
 def test_failure_classifier_uses_validation_calibrated_threshold(monkeypatch, tmp_path):
@@ -82,7 +94,7 @@ def test_failure_classifier_uses_validation_calibrated_threshold(monkeypatch, tm
 
     predictor = _CalibratingPredictor.created[-1]
     metrics = result.metrics["per_label"]["machine_failure"]
-    assert predictor.kwargs["eval_metric"] == "recall"
+    assert getattr(predictor.kwargs["eval_metric"], "name", predictor.kwargs["eval_metric"]) == "f2"
     assert predictor.fit_calibration == "auto"
     assert model.thresholds["machine_failure"] == pytest.approx(0.23)
     assert metrics["decision_threshold"] == pytest.approx(0.23)

@@ -46,6 +46,7 @@ def main():
     from autogluon.tabular import TabularPredictor
     from pdm.fault_prediction.metrics import (
         classification_eval_metric,
+        classification_eval_metric_name,
         evaluate_binary_classifier,
         normalize_optimization_priority,
         predictor_decision_threshold,
@@ -53,11 +54,12 @@ def main():
 
     optimization_priority = normalize_optimization_priority(optimization_priority)
     eval_metric = classification_eval_metric(optimization_priority)
+    eval_metric_name = classification_eval_metric_name(optimization_priority)
     metrics = {
         "formulation": "multi-label classification",
         "experiment": experiment_name,
         "optimization_priority": optimization_priority,
-        "eval_metric": eval_metric,
+        "eval_metric": eval_metric_name,
         "labels": {},
     }
 
@@ -91,7 +93,7 @@ def main():
             "test_average_precision": None if cls_metrics["average_precision"] is None else round(cls_metrics["average_precision"], 4),
             "positive_rate": round(pos_rate, 5),
             "optimization_priority": optimization_priority,
-            "eval_metric": eval_metric,
+            "eval_metric": eval_metric_name,
             "decision_threshold": round(predictor_decision_threshold(predictor), 6),
             "best_model": predictor.model_best, "top_features": top_feats,
         }

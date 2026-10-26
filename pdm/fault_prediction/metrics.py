@@ -6,19 +6,51 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from autogluon.core.metrics import make_scorer
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
+    fbeta_score,
     precision_score,
     recall_score,
     roc_auc_score,
 )
 
 
+def _f2_score(y_true, y_pred) -> float:
+    """F2: emphasize recall while still penalizing false alarms."""
+    return float(fbeta_score(y_true, y_pred, beta=2.0, zero_division=0))
+
+
+def _f05_score(y_true, y_pred) -> float:
+    """F0.5: emphasize precision while still rewarding failure coverage."""
+    return float(fbeta_score(y_true, y_pred, beta=0.5, zero_division=0))
+
+
+F2_SCORER = make_scorer(
+    name="f2",
+    score_func=_f2_score,
+    optimum=1.0,
+    greater_is_better=True,
+    needs_class=True,
+)
+F05_SCORER = make_scorer(
+    name="f0.5",
+    score_func=_f05_score,
+    optimum=1.0,
+    greater_is_better=True,
+    needs_class=True,
+)
+
 OPTIMIZATION_METRICS = {
     "balanced": "f1",
-    "recall": "recall",
-    "precision": "precision",
+    "recall": F2_SCORER,
+    "precision": F05_SCORER,
+}
+OPTIMIZATION_METRIC_NAMES = {
+    "balanced": "f1",
+    "recall": "f2",
+    "precision": "f0.5",
 }
 
 
@@ -33,9 +65,19 @@ def normalize_optimization_priority(priority: str = "balanced") -> str:
     return normalized
 
 
-def classification_eval_metric(priority: str = "balanced") -> str:
-    """Return the AutoGluon metric that matches the operating priority."""
+def classification_eval_metric(priority: str = "balanced"):
+    """Return the AutoGluon scorer that matches the operating priority.
+
+    Recall and precision priorities use F2 and F0.5 rather than pure recall or
+    precision. This preserves the requested bias without selecting degenerate
+    all-positive or almost-all-negative operating points.
+    """
     return OPTIMIZATION_METRICS[normalize_optimization_priority(priority)]
+
+
+def classification_eval_metric_name(priority: str = "balanced") -> str:
+    """Return the stable, JSON-safe name of the priority's evaluation metric."""
+    return OPTIMIZATION_METRIC_NAMES[normalize_optimization_priority(priority)]
 
 
 def predictor_decision_threshold(predictor) -> float:

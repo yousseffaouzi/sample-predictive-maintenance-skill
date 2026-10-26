@@ -23,6 +23,7 @@ from autogluon.tabular import TabularPredictor
 
 from pdm.fault_prediction.metrics import (
     classification_eval_metric,
+    classification_eval_metric_name,
     evaluate_binary_classifier,
     normalize_optimization_priority,
     predictor_decision_threshold,
@@ -97,6 +98,7 @@ def _train_single_label(label, feature_cols, train_df, test_df, output_dir, time
 
     optimization_priority = normalize_optimization_priority(optimization_priority)
     eval_metric = classification_eval_metric(optimization_priority)
+    eval_metric_name = classification_eval_metric_name(optimization_priority)
     predictor = TabularPredictor(
         label=label, eval_metric=eval_metric, problem_type="binary",
         path=str(output_dir / "ag_model" / label.replace(" ", "_")),
@@ -129,7 +131,7 @@ def _train_single_label(label, feature_cols, train_df, test_df, output_dir, time
         "test_average_precision": None if cls_metrics["average_precision"] is None else round(cls_metrics["average_precision"], 4),
         "positive_rate": round(pos_rate, 5),
         "optimization_priority": optimization_priority,
-        "eval_metric": eval_metric,
+        "eval_metric": eval_metric_name,
         "decision_threshold": round(predictor_decision_threshold(predictor), 6),
         "n_positives_train": n_pos, "best_model": predictor.model_best,
         "top_features": top_feats,
@@ -151,7 +153,7 @@ def train_multilabel(train_df, test_df, args):
     metrics = {
         "formulation": "multi-label classification",
         "optimization_priority": optimization_priority,
-        "eval_metric": classification_eval_metric(optimization_priority),
+        "eval_metric": classification_eval_metric_name(optimization_priority),
         "labels": {},
     }
     all_importance = {}
@@ -236,6 +238,7 @@ def train_single(train_df, test_df, formulation, args):
     # Use NASA scoring as objective for RUL if available
     if formulation == "regression" and nasa_ag_scorer is not None:
         eval_metric = nasa_ag_scorer
+    eval_metric_name = getattr(eval_metric, "name", eval_metric)
 
     drop_cols = []
     if formulation == "survival":
@@ -246,7 +249,7 @@ def train_single(train_df, test_df, formulation, args):
         train_df = train_df.drop(columns=[c for c in drop_cols if c in train_df.columns])
         test_df = test_df.drop(columns=[c for c in drop_cols if c in test_df.columns])
 
-    print(f"  Target: {target_col} | Metric: {eval_metric}")
+    print(f"  Target: {target_col} | Metric: {eval_metric_name}")
 
     sample_weight_col = None
     if args.rebalance and formulation == "classification":
@@ -318,8 +321,8 @@ def train_single(train_df, test_df, formulation, args):
             print(f"  ⚠️ Unstable feature rankings (>10 rank swing): {unstable[:5]}")
 
     metrics = {
-        "formulation": formulation, "metric": eval_metric,
-        "test_score": float(perf[eval_metric]) if isinstance(perf, dict) else float(perf),
+        "formulation": formulation, "metric": eval_metric_name,
+        "test_score": float(perf[eval_metric_name]) if isinstance(perf, dict) else float(perf),
         "best_model": predictor.model_best,
     }
     if importance is not None:

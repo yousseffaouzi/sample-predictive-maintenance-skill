@@ -70,7 +70,7 @@ def test_remote_binary_training_emits_ranking_metrics(monkeypatch, tmp_path):
     assert metrics["roc_auc"] == pytest.approx(1.0)
     assert metrics["average_precision"] == pytest.approx(1.0)
     assert metrics["optimization_priority"] == "recall"
-    assert metrics["eval_metric"] == "recall"
+    assert metrics["eval_metric"] == "f2"
     assert metrics["decision_threshold"] == pytest.approx(0.37)
 
 
@@ -113,7 +113,7 @@ def test_remote_multilabel_training_emits_ranking_metrics(monkeypatch, tmp_path,
     assert metrics["mean_test_roc_auc"] == pytest.approx(1.0)
     assert metrics["mean_test_average_precision"] == pytest.approx(1.0)
     assert metrics["optimization_priority"] == "precision"
-    assert label_metrics["eval_metric"] == "precision"
+    assert label_metrics["eval_metric"] == "f0.5"
     assert label_metrics["decision_threshold"] == pytest.approx(0.37)
 
     output = capsys.readouterr().out

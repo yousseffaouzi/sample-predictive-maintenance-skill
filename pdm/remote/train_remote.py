@@ -51,6 +51,7 @@ def main():
         from autogluon.tabular import TabularPredictor
         from pdm.fault_prediction.metrics import (
             classification_eval_metric,
+            classification_eval_metric_name,
             evaluate_binary_classifier,
             normalize_optimization_priority,
             predictor_decision_threshold,
@@ -58,6 +59,7 @@ def main():
         target = "machine_failure"
         optimization_priority = normalize_optimization_priority(optimization_priority)
         eval_metric = classification_eval_metric(optimization_priority)
+        eval_metric_name = classification_eval_metric_name(optimization_priority)
         predictor = TabularPredictor(
             label=target, eval_metric=eval_metric, problem_type="binary",
             path=str(model_dir / "ag_model"), verbosity=1,
@@ -73,7 +75,7 @@ def main():
             "roc_auc": None if cls_metrics["roc_auc"] is None else round(float(cls_metrics["roc_auc"]), 4),
             "average_precision": None if cls_metrics["average_precision"] is None else round(float(cls_metrics["average_precision"]), 4),
             "optimization_priority": optimization_priority,
-            "eval_metric": eval_metric,
+            "eval_metric": eval_metric_name,
             "decision_threshold": round(predictor_decision_threshold(predictor), 6),
         }
         result = type("R", (), {"metrics": result_metrics})()
