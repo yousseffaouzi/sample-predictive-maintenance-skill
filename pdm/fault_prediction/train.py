@@ -339,7 +339,7 @@ def train_single(train_df, test_df, formulation, args):
         y_true = test_df[target_col].values
         cls_metrics = evaluate_binary_classifier(predictor, X_test, y_true, y_pred=y_pred)
         metrics.update(cls_metrics)
-        metrics["optimization_priority"] = normalize_optimization_priority(args.optimization_priority)
+        metrics["optimization_priority"] = optimization_priority
         metrics["decision_threshold"] = round(predictor_decision_threshold(predictor), 6)
         print(f"  F1: {metrics['f1']:.4f} | Precision: {metrics['precision']:.4f} | Recall: {metrics['recall']:.4f}")
         print(f"  Decision threshold: {metrics['decision_threshold']:.6f} ({metrics['optimization_priority']} priority)")
