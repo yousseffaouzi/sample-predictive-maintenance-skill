@@ -147,7 +147,7 @@ def train_multilabel(train_df, test_df, args):
     print(f"  Labels: {len(label_cols)} | Features: {len(feature_cols)}")
     print(f"  Time/label: {args.time_limit}s | Presets: {args.presets} | Workers: {args.workers}\n")
 
-    optimization_priority = normalize_optimization_priority(args.optimization_priority)
+    optimization_priority = normalize_optimization_priority(getattr(args, "optimization_priority", "balanced"))
     metrics = {
         "formulation": "multi-label classification",
         "optimization_priority": optimization_priority,
@@ -224,8 +224,11 @@ def train_single(train_df, test_df, formulation, args):
     target_map = {"regression": "RUL", "classification": "machine_failure", "survival": "duration"}
     target_col = target_map[formulation]
     problem_type = "binary" if formulation == "classification" else "regression"
+    optimization_priority = normalize_optimization_priority(
+        getattr(args, "optimization_priority", "balanced")
+    )
     eval_metric = (
-        classification_eval_metric(args.optimization_priority)
+        classification_eval_metric(optimization_priority)
         if formulation == "classification"
         else "root_mean_squared_error"
     )
