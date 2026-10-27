@@ -1,0 +1,69 @@
+name: R6 docs builder
+
+on:
+  push:
+    branches:
+      - ci/r6-docs-builder
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/data-leakage-guard
+          fetch-depth: 0
+      - name: Patch R6 guidance
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('references/data-exploration.md')
+          text = p.read_text()
+          marker = '## Step 2.4: Write `data_exploration.md`\n'
+          assert text.count(marker) == 1
+          block = '''## Step 2.4: Run the Leakage Guard\n\nBefore finalizing feature candidates, run the cheap leakage scan on any assembled candidate modeling frame. If the target has not been chosen yet, run the row-order scan now and repeat with `target_columns` after the user confirms the target.\n\n```python\nfrom pdm.data.leakage import detect_feature_leakage, format_leakage_report\n\nreport = detect_feature_leakage(\n    candidate_df,\n    target_columns=target_columns,\n    ignore_columns=[c for c in [entity_col, split_time_col] if c],\n)\nprint(format_leakage_report(report))\n```\n\nThe guard flags three high-signal cases:\n- near-perfect monotonic correlation with row order (for example `original_index` or a clock/index proxy);\n- a feature that exactly copies a target;\n- near-perfect numeric correlation with a target.\n\n**Do not auto-drop flagged columns.** A strong correlation can occasionally be legitimate. Record every finding under **Data Quality Observations**, explain why it may leak future/target information, and ask the user to confirm exclusion when the column is otherwise a candidate model feature. Known entity keys or split-only timestamps that are never model features may be passed via `ignore_columns`.\n\nThe Phase 3/4 `validate_dataset.py` gate repeats the same warning-only check on the final processed dataset, so a suspicious column missed during exploration is surfaced again before training.\n\n'''
+          text = text.replace(marker, block + '## Step 2.5: Write `data_exploration.md`\n')
+          replacements = {
+              '## Step 2.5: Present Questions — STOP AND WAIT': '## Step 2.6: Present Questions — STOP AND WAIT',
+              '## Step 2.6: Validate Answers': '## Step 2.7: Validate Answers',
+              '## Step 2.7: Record Decisions': '## Step 2.8: Record Decisions',
+          }
+          for old, new in replacements.items():
+              assert text.count(old) == 1, old
+              text = text.replace(old, new)
+          quality = '6. **Data Quality Observations** — nulls, type issues, sparse columns\n'
+          assert text.count(quality) == 1
+          text = text.replace(quality, '6. **Data Quality Observations** — nulls, type issues, sparse columns, leakage-guard findings and disposition\n')
+          p.write_text(text)
+
+          p = Path('SKILL.md')
+          text = p.read_text()
+          old = 'Steps: discover bucket structure → explore schemas → validate join keys → write `data_exploration.md` → present questions → **STOP AND WAIT** → validate answers → record decisions.'
+          new = 'Steps: discover bucket structure → explore schemas → validate join keys → run the leakage guard and record findings → write `data_exploration.md` → present questions → **STOP AND WAIT** → validate answers → record decisions.'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, new))
+
+          p = Path('examples/shell_compressor/skill-improvement-recommendations.md')
+          text = p.read_text()
+          marker = '### R6 — Add an automated leakage check in data exploration\n'
+          assert text.count(marker) == 1
+          status = '> **Status: implemented by this change.** `pdm.data.leakage.detect_feature_leakage` flags near-monotonic row-order proxies, exact target copies, and near-perfect target correlations without auto-dropping columns. The existing `validate_dataset.py` gate now uses the same detector for single-target and multi-label datasets, and Phase 2 guidance requires findings to be surfaced for user review.\n'
+          text = text.replace(marker, marker + '\n' + status)
+          p.write_text(text)
+          PY
+      - name: Verify intended docs only
+        run: |
+          git diff --check
+          git diff --name-only
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "SKILL.md examples/shell_compressor/skill-improvement-recommendations.md references/data-exploration.md "
+      - name: Commit docs to feature branch
+        run: |
+          git config user.name "Youssef Faouzi"
+          git config user.email "46967695+yousseffaouzi@users.noreply.github.com"
+          git add SKILL.md references/data-exploration.md examples/shell_compressor/skill-improvement-recommendations.md
+          git commit -m "docs: add leakage review to data exploration"
+          git push origin HEAD:feat/data-leakage-guard
