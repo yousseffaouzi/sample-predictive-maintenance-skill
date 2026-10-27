@@ -1,0 +1,39 @@
+name: R6 final validation
+
+on:
+  push:
+    branches:
+      - ci/r6-final-validation
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - name: Focused R6 tests
+        run: uv run pytest tests/test_data_leakage.py -q
+      - name: Direct validator CLI smoke
+        run: |
+          uv run python - <<'PY'
+          import numpy as np
+          import pandas as pd
+          n = 100
+          target = np.tile([0, 1], n // 2)
+          pd.DataFrame({
+              'original_index': np.arange(n),
+              'target_copy': target,
+              'sensor': np.sin(np.arange(n)),
+              'label': target,
+          }).to_csv('/tmp/r6.csv', index=False)
+          PY
+          uv run python pdm/fault_prediction/validate_dataset.py --data /tmp/r6.csv --target label | tee /tmp/r6-validator.log
+          grep -q 'Possible feature leakage' /tmp/r6-validator.log
+          grep -q 'original_index' /tmp/r6-validator.log
+          grep -q 'target_copy' /tmp/r6-validator.log
+      - name: Full repository tests
+        run: uv run pytest tests/ -q
