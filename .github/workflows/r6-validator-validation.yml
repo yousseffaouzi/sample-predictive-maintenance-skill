@@ -1,0 +1,21 @@
+name: R6 validator validation
+
+on:
+  push:
+    branches:
+      - ci/r6-validator-validation
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - name: Focused R6 tests
+        run: uv run pytest tests/test_data_leakage.py -q
+      - name: Full repository tests
+        run: uv run pytest tests/ -q
