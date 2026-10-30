@@ -20,14 +20,14 @@ def test_counts_distinct_positive_runs_per_entity_after_time_sort():
         entity_col="device_id",
         time_col="timestamp",
         sparse_positive_rate=0.01,
-        few_event_threshold=3,
+        few_event_threshold=4,
     )
 
     stats = report["labels"]["label"]
     assert stats["positives"] == 4
     assert stats["positive_rate"] == pytest.approx(0.5)
     assert stats["positive_entities"] == 2
-    assert stats["distinct_positive_events"] == 2
+    assert stats["distinct_positive_events"] == 3
     assert stats["few_distinct_events"] is True
     assert report["recommendation"] == "anomaly_primary"
 
