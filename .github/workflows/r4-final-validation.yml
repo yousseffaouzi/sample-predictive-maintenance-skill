@@ -1,0 +1,49 @@
+name: R4 final validation
+
+on:
+  push:
+    branches:
+      - ci/r4-final-validation
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: latest
+          enable-cache: false
+      - run: uv sync --frozen
+      - name: Focused R4 tests
+        run: uv run pytest tests/test_label_economics.py -q
+      - name: Sparse-label behavior smoke
+        run: |
+          uv run python - <<'PY'
+          import pandas as pd
+          from pdm.data.label_economics import analyze_classification_label_economics
+
+          df = pd.DataFrame({
+              'device_id': ['a'] * 200,
+              'timestamp': range(200),
+              'machine_failure': [0] * 199 + [1],
+          })
+          report = analyze_classification_label_economics(
+              df,
+              'machine_failure',
+              entity_col='device_id',
+              time_col='timestamp',
+          )
+          assert report['labels']['machine_failure']['positive_rate'] == 0.005
+          assert report['labels']['machine_failure']['distinct_positive_events'] == 1
+          assert report['recommendation'] == 'anomaly_primary'
+          print(report['guidance'])
+          PY
+          grep -q 'anomaly_primary' SKILL.md
+          grep -q 'Classification Label Economics' references/data-exploration.md
+          grep -q 'Refine Classification with Label Economics' pdm/README.md
+      - name: Full repository tests
+        run: uv run pytest tests/ -q
