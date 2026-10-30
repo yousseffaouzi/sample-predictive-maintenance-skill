@@ -1,0 +1,112 @@
+name: R4 docs builder
+
+on:
+  push:
+    branches:
+      - ci/r4-docs-builder
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check out feature branch
+        run: |
+          git fetch origin feat/formulation-guidance-label-economics
+          git checkout -B feat/formulation-guidance-label-economics origin/feat/formulation-guidance-label-economics
+      - name: Patch R4 guidance
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "SKILL.md",
+              "Steps: discover bucket structure → explore schemas → validate join keys → run the leakage guard and record findings → write `data_exploration.md` → present questions → **STOP AND WAIT** → validate answers → record decisions.",
+              "Steps: discover bucket structure → explore schemas → validate join keys → run the leakage guard and record findings → assess classification label economics when relevant → write `data_exploration.md` → present questions → **STOP AND WAIT** → validate answers → record decisions.",
+          )
+
+          replace_once(
+              "SKILL.md",
+              """**Formulation recommendation**: When asking the user which formulation to use, explain the tradeoffs in plain language (see `pdm/README.md` § \"Choosing a Formulation\"). Use the decision flowchart:\n- Run-to-failure data + need precise timeline → RUL\n- Run-to-failure data + need alerts only → Classification\n- Devices maintained before failure (censored data) → Survival\n- Multiple independent failure modes → Multi-label classification""",
+              """**Formulation recommendation**: When asking the user which formulation to use, explain the tradeoffs in plain language (see `pdm/README.md` § \"Choosing a Formulation\"). First use data structure and operational need to choose the candidate family:\n- Run-to-failure data + need precise timeline → RUL\n- Run-to-failure data + need alerts only → Classification\n- Devices maintained before failure (censored data) → Survival\n- Multiple independent failure modes → Multi-label classification\n\nFor a binary or multi-label **classification candidate**, refine that recommendation with label economics before asking the user to confirm. Run `pdm.data.label_economics.analyze_classification_label_economics(...)` on the candidate modeling frame. It reports positive rate and, when entity/time ordering is available, distinct positive events (contiguous positive runs):\n- `anomaly_primary` → every selected label is <1% positive and/or has <20 distinct positive events; recommend anomaly detection as the primary model and classification as a secondary check for known failure modes.\n- `hybrid` → only some labels are sparse/few-event; recommend classification for supported labels plus anomaly detection for sparse/novel modes.\n- `classification_primary_candidate` → label scarcity alone does not argue against supervised classification; keep classification primary and decide separately whether anomaly detection adds value.\n\nThe 1% / 20-event cutoffs are **screening thresholds, not universal laws**. Use them to expose weak label economics and explain the tradeoff; never skip explicit user confirmation.""",
+          )
+
+          replace_once(
+              "SKILL.md",
+              "1. **Formulation** — confirm the recommended formulation (multi-label, binary, RUL, survival). Propose based on data evidence but get explicit confirmation.",
+              "1. **Formulation** — confirm the recommended formulation (multi-label, binary, RUL, survival). Propose based on data evidence and operational need. For classification candidates, include positive rate and distinct positive-event counts when available, plus the label-economics recommendation (`anomaly_primary`, `hybrid`, or `classification_primary_candidate`). Get explicit confirmation.",
+          )
+
+          replace_once(
+              "SKILL.md",
+              "5. **Anomaly detection** — also build an unsupervised model? Recommend based on data dimensionality.",
+              "5. **Anomaly detection** — also build an unsupervised model? Recommend based on data dimensionality, label completeness, and label economics. If classification labels are very sparse (<1%) or few-event (<20 distinct events), recommend anomaly detection as primary or companion according to the label-economics result.",
+          )
+
+          replace_once(
+              "SKILL.md",
+              "Log raw dataset shape, column count, label positive rates, and split sizes in `log.md`.",
+              "Log raw dataset shape, column count, label positive rates, distinct positive-event counts for classification labels when temporal ordering is available, and split sizes in `log.md`.",
+          )
+
+          marker = "8. **Label Candidates** — all possible targets with source, construction logic, estimated positive rate\n\n### Low-Positives Label Decision Framework"
+          insertion = """8. **Label Candidates** — all possible targets with source, construction logic, estimated positive rate, and distinct positive-event count when temporal ordering is available\n\n### Classification Label Economics\n\nFor every binary or multi-label classification candidate, quantify whether the labels contain enough independent failure evidence to justify making supervised classification the primary formulation. Positive rows alone can be misleading: a four-hour incident may generate dozens of positive rows but still represent only one failure event.\n\nUse the shared helper on the assembled candidate frame:\n\n```python\nfrom pdm.data.label_economics import (\n    analyze_classification_label_economics,\n    format_label_economics_report,\n)\n\nlabel_economics = analyze_classification_label_economics(\n    candidate_df,\n    label_columns=target_columns,\n    entity_col=entity_col,      # optional; keeps events separate per asset\n    time_col=observation_time,  # optional; enables distinct-event counting\n)\nprint(format_label_economics_report(label_economics))\n```\n\nA **distinct positive event** is a contiguous run of positive observations after sorting by entity and time. If there is no reliable temporal ordering, the helper leaves event count unavailable rather than inventing adjacency from row order.\n\nDefault screening rules:\n- positive rate **< 1%** → sparse label;\n- distinct positive events **< 20** → few-event label, when event counting is available;\n- all selected labels sparse/few-event → `anomaly_primary`; recommend anomaly detection as the primary formulation and classification as a secondary check for known failure modes;\n- only some labels sparse/few-event → `hybrid`; keep classification for supported labels and add anomaly detection for sparse or novel failure modes;\n- no labels flagged → `classification_primary_candidate`; supervised classification can remain primary, subject to the rest of the formulation decision.\n\nThese thresholds are deliberately **advisory screening thresholds**. They do not override censoring/run-to-failure evidence (which may point to survival or RUL), benchmark protocols, safety requirements, or the user's operational constraints. Record the per-label positive count, positive rate, distinct-event count, and recommendation in `data_exploration.md`, then explain the recommendation when asking the user to confirm the formulation.\n\n### Low-Positives Label Decision Framework"""
+          replace_once("references/data-exploration.md", marker, insertion)
+
+          replace_once(
+              "references/data-exploration.md",
+              """- **Formulation** — binary / multi-label / RUL / survival? **Recommend** based on data:\n  - Run-to-failure with known failure times → **RUL regression**\n  - Maintenance/censoring present → **survival analysis**\n  - Multiple independent failure modes labeled → **multi-label classification**\n  - Binary health/failure flags → **binary classification**""",
+              """- **Formulation** — binary / multi-label / RUL / survival? **Recommend** based on data and label economics:\n  - Run-to-failure with known failure times → **RUL regression**\n  - Maintenance/censoring present → **survival analysis**\n  - Multiple independent failure modes labeled → **multi-label classification candidate**\n  - Binary health/failure flags → **binary classification candidate**\n  - For either classification candidate, run the label-economics analysis. If all labels are sparse (<1%) and/or few-event (<20 distinct events), recommend **anomaly detection as primary + classification as secondary**. If only some labels are sparse/few-event, recommend a **hybrid** strategy. Include the measured rates/event counts in the question.""",
+          )
+
+          replace_once(
+              "references/data-exploration.md",
+              "- **Anomaly Detection** — also build an unsupervised Isolation Forest model to catch novel failure modes? **Recommend yes** when the data has high-dimensional sensor readings or when the labelled failure modes are unlikely to be exhaustive.",
+              "- **Anomaly Detection** — also build an unsupervised Isolation Forest model to catch novel failure modes? **Recommend yes** when the data has high-dimensional sensor readings, when labelled failure modes are unlikely to be exhaustive, or when classification label economics returns `anomaly_primary` / `hybrid`. For `anomaly_primary`, present anomaly detection as the recommended primary model rather than merely an optional extra.",
+          )
+
+          replace_once(
+              "pdm/README.md",
+              "│   ├── data_exploration.py  # S3/parquet discovery & schema inspection\n│   ├── utils.py             # Feature engineering & caching utilities",
+              "│   ├── data_exploration.py  # S3/parquet discovery & schema inspection\n│   ├── label_economics.py   # Positive-rate/event-count formulation guidance\n│   ├── utils.py             # Feature engineering & caching utilities",
+          )
+
+          readme_marker = """candidates = discover_join_keys(\"my-bucket\", prefixes=[\"telemetry/\", \"device_master/\"], partitioned=[\"telemetry/\"])\n```\n\n### utils.py"""
+          readme_insert = """candidates = discover_join_keys(\"my-bucket\", prefixes=[\"telemetry/\", \"device_master/\"], partitioned=[\"telemetry/\"])\n```\n\n### label_economics.py\n\nAdvisory diagnostics for classification formulation choice. `analyze_classification_label_economics()` reports positive prevalence and, when temporal ordering is available, the number of distinct positive events rather than treating every positive row as an independent failure example.\n\n```python\nfrom pdm.data.label_economics import analyze_classification_label_economics\n\nreport = analyze_classification_label_economics(\n    df,\n    label_columns=[\"label_overheating\", \"label_board_failure\"],\n    entity_col=\"device_id\",\n    time_col=\"observation_time\",\n)\nprint(report[\"recommendation\"])\n```\n\nThe default screening signals are <1% positive prevalence and <20 distinct positive events. When every selected label is sparse/few-event, the helper recommends anomaly detection as the primary formulation with classification as a secondary check. Mixed support yields a hybrid recommendation. These are guidance signals, not automatic model-selection rules.\n\n### utils.py"""
+          replace_once("pdm/README.md", readme_marker, readme_insert)
+
+          formulation_marker = """Multiple failure modes? Use **multi-label classification** — the library trains one model per label and returns probabilities for each failure type.\n\n### Practical Example: Fleet of EV Chargers"""
+          formulation_insert = """Multiple failure modes? Use **multi-label classification** — the library trains one model per label and returns probabilities for each failure type.\n\n### Refine Classification with Label Economics\n\nBefore making classification the primary formulation, check how much independent failure evidence the labels actually contain. A dataset can have hundreds of positive rows but only a handful of real failure events if each incident spans many consecutive observations.\n\nUse `analyze_classification_label_economics()` during exploration. By default:\n- **<1% positive** is treated as sparse;\n- **<20 distinct positive events** is treated as few-event when entity/time ordering is available;\n- if every label is sparse/few-event, recommend **anomaly detection as the primary model** and classification as a secondary check for known failure modes;\n- if only some labels are sparse/few-event, use a **hybrid** strategy;\n- otherwise classification remains a strong primary candidate.\n\nThese are screening thresholds, not universal cutoffs. RUL and survival evidence still takes precedence when the data structure supports those formulations, and the user still confirms the final modeling strategy.\n\n### Practical Example: Fleet of EV Chargers"""
+          replace_once("pdm/README.md", formulation_marker, formulation_insert)
+
+          replace_once(
+              "examples/shell_compressor/skill-improvement-recommendations.md",
+              "### R4 — Add formulation guidance keyed to label economics\n",
+              "### R4 — Add formulation guidance keyed to label economics\n\n> **Status: implemented by this change.** `pdm.data.label_economics.analyze_classification_label_economics` reports positive prevalence and distinct positive-event counts, and Phase 2 now uses those signals to recommend anomaly-primary, hybrid, or classification-primary-candidate strategies while still requiring user confirmation.\n",
+          )
+          PY
+      - name: Verify intended docs only
+        run: |
+          git diff --check
+          git diff --name-only
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "$(printf '%s\n' SKILL.md examples/shell_compressor/skill-improvement-recommendations.md pdm/README.md references/data-exploration.md | sort | tr '\n' ' ')"
+      - name: Commit docs to feature branch
+        run: |
+          git config user.name "Youssef Faouzi"
+          git config user.email "46967695+yousseffaouzi@users.noreply.github.com"
+          git add SKILL.md pdm/README.md references/data-exploration.md examples/shell_compressor/skill-improvement-recommendations.md
+          git commit -m "docs: key formulation guidance to label economics"
+          git push origin HEAD:feat/formulation-guidance-label-economics
