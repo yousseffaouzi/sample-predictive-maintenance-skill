@@ -1,0 +1,21 @@
+name: R8 final head validation
+on:
+  push:
+    branches: [ci/r8-final-head-validation]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - name: Memory preflight regression tests
+        run: uv run pytest tests/test_temporal_memory_preflight.py tests/test_temporal_anomaly.py -q
+      - name: Confirm documentation coverage
+        run: |
+          grep -q 'Temporal PCA memory pre-flight' references/experimentation.md
+          grep -q 'Memory pre-flight for the temporal detector (implemented)' examples/shell_compressor/skill-improvement-recommendations.md
