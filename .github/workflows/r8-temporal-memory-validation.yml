@@ -1,0 +1,19 @@
+name: R8 temporal memory preflight validation
+on:
+  push:
+    branches: [ci/r8-temporal-memory-validation]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - name: Focused temporal memory tests
+        run: uv run pytest tests/test_temporal_memory_preflight.py tests/test_temporal_anomaly.py -q
+      - name: Full repository suite
+        run: uv run pytest tests/ -q
