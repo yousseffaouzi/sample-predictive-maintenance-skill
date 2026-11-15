@@ -1,0 +1,54 @@
+name: R8 experiment output isolation validation
+on:
+  push:
+    branches: [ci/r8-output-isolation-validation]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - name: Focused experiment output regression tests
+        run: uv run pytest tests/test_experiment_outputs.py -q
+      - name: Repeated real temporal run smoke
+        shell: bash
+        run: |
+          mkdir -p examples/shell_compressor/data
+          uv run python - <<'PY'
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+          rng = np.random.default_rng(123)
+          root = Path("examples/shell_compressor/data")
+          train = pd.DataFrame(rng.normal(size=(100, 4)), columns=[f"sensor_{i}" for i in range(4)])
+          train["machine_failure"] = 0
+          test = pd.DataFrame(rng.normal(size=(65, 4)), columns=[f"sensor_{i}" for i in range(4)])
+          test["machine_failure"] = 0
+          test.loc[40:50, "machine_failure"] = 1
+          test.loc[40:50, "sensor_0"] += 5
+          train.to_csv(root / "raw_train.csv", index=False)
+          test.to_csv(root / "raw_test.csv", index=False)
+          PY
+          uv run python examples/shell_compressor/anomaly_detection/run_e01_temporal_pca.py 3 2
+          uv run python examples/shell_compressor/anomaly_detection/run_e01_temporal_pca.py 3 2
+          uv run python - <<'PY'
+          from pathlib import Path
+          import json
+          root = Path("examples/shell_compressor/anomaly_detection/experiments/01_temporal_pca")
+          runs = sorted(root.glob("w3_components2_*"))
+          assert len(runs) == 2, runs
+          for run in runs:
+              assert (run / "model" / "pca_model.joblib").exists(), run
+              assert (run / "model" / "metadata.json").exists(), run
+              summary = json.loads((run / "summary.json").read_text())
+              assert summary["window_size"] == 3
+              assert summary["saved_artifact_score_check"] == "passed"
+          print("PASS: both runs independently saved; model reload checks passed")
+          PY
+      - name: Full repository test suite
+        run: uv run pytest tests/ -q
