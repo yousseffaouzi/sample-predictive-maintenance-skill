@@ -1,0 +1,24 @@
+name: R8 final experiment output validation
+on:
+  push:
+    branches: [ci/r8-output-final-head]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - name: Test unique and concurrent output reservation
+        run: uv run pytest tests/test_experiment_outputs.py -q
+      - name: Verify documentation and example integration
+        run: |
+          grep -q 'Run Output Isolation and Artifact Verification' references/experimentation.md
+          grep -q 'Repeating the experiment safely' examples/shell_compressor/anomaly_detection/experiments.md
+          grep -q 'Per-experiment output directories (implemented)' examples/shell_compressor/skill-improvement-recommendations.md
+          grep -q 'saved_artifact_score_check' examples/shell_compressor/anomaly_detection/run_e01_temporal_pca.py
+          grep -q 'reserve_experiment_run_dir' examples/shell_compressor/fault_prediction/run_c03_threshold.py
