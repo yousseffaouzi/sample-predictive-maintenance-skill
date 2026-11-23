@@ -11,9 +11,16 @@ import pytest
 
 from pdm.deployment import serve as unified
 from pdm.base import PDMModel
-from sagemaker_container import inference as container
 
 ROOT = Path(__file__).resolve().parents[1]
+# The SageMaker container is copied into /opt/program, not installed as a
+# Python package. Load the same entry point by its on-disk path.
+spec = importlib.util.spec_from_file_location(
+    "sagemaker_contract_inference", ROOT / "sagemaker_container" / "inference.py"
+)
+container = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(container)
+
 HANDLERS = [unified, container]
 
 
