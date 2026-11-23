@@ -201,8 +201,9 @@ missing numeric values are emitted as JSON `null` rather than non-standard
 `NaN`/`Infinity` tokens. These contracts are validated by
 `tests/test_sagemaker_serving_contract.py`; slim-container integration
 remains covered by `tests/test_inference_container.py`.
-Malformed input receives HTTP 400; model-loading and inference failures
-are not disguised as client errors.
+Malformed input and requests with no recognizable model features receive
+HTTP 400; unrelated model-loading and inference failures are not disguised as
+client errors.
 
 ### Endpoint Key Details
 

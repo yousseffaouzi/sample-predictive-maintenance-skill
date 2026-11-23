@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from pdm.deployment import serve as unified
+from pdm.deployment.serving_io import FeatureSchemaError
 from pdm.base import PDMModel
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,7 +137,7 @@ def test_container_rejects_unrelated_schema_but_zero_fills_partial_features(tmp_
     aligned = container.model_input(pd.DataFrame({"a": [3]}), model_dict)
     assert list(aligned.columns) == ["a", "b"]
     assert aligned["b"].tolist() == [0]
-    with pytest.raises(ValueError, match="No expected model features"):
+    with pytest.raises(FeatureSchemaError, match="No expected model features"):
         container.model_input(pd.DataFrame({"unrelated": [1]}), model_dict)
 
 
@@ -179,3 +180,23 @@ def test_http_valid_parameterized_content_type_returns_200(monkeypatch):
     )
     assert response.status_code == 200
     assert response.get_json() == {"prediction": [1]}
+
+
+def test_http_unrelated_schema_returns_400_not_500(monkeypatch):
+    pytest.importorskip("flask")
+    monkeypatch.setitem(sys.modules, "inference", container)
+    source = ROOT / "sagemaker_container" / "serve.py"
+    spec = importlib.util.spec_from_file_location("pdm_http_contract_schema", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "model_fn", lambda path: object())
+
+    def bad_schema(df, model):
+        raise FeatureSchemaError("No expected model features found in input")
+
+    monkeypatch.setattr(module, "predict_fn", bad_schema)
+    response = module.app.test_client().post(
+        "/invocations", data='[{"wrong":1}]', content_type="application/json"
+    )
+    assert response.status_code == 400
+    assert "No expected model features" in response.get_json()["error"]

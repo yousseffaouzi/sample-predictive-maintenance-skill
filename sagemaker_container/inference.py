@@ -28,7 +28,7 @@ import pandas as pd
 from autogluon.tabular import TabularPredictor
 
 from pdm.data.utils import align_to_model
-from pdm.deployment.serving_io import parse_request_rows, serialize_json_response
+from pdm.deployment.serving_io import FeatureSchemaError, parse_request_rows, serialize_json_response
 
 RUNTIME_FILE = "runtime.py"
 
@@ -91,7 +91,7 @@ def model_input(input_data, model_dict):
     # However an entirely unrelated schema would silently become all-zero input.
     expected = model_dict["feature_names"]
     if expected and not set(expected).intersection(features.columns):
-        raise ValueError(
+        raise FeatureSchemaError(
             "No expected model features found in input; check request columns "
             "and whether code/runtime.py was packaged"
         )

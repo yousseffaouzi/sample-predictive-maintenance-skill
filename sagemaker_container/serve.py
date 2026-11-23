@@ -10,6 +10,7 @@ sys.path.insert(0, "/opt/program")
 
 from flask import Flask, request, Response
 from inference import model_fn, input_fn, predict_fn, output_fn
+from pdm.deployment.serving_io import FeatureSchemaError
 
 app = Flask(__name__)
 model = None
@@ -35,7 +36,14 @@ def invocations():
         )
     if model is None:
         model = model_fn("/opt/ml/model")
-    result = predict_fn(data, model)
+    try:
+        result = predict_fn(data, model)
+    except FeatureSchemaError as exc:
+        return Response(
+            response=json.dumps({"error": str(exc)}),
+            status=400,
+            mimetype="application/json",
+        )
     return Response(
         response=output_fn(result, "application/json"),
         status=200,

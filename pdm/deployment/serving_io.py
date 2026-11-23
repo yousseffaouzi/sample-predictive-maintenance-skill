@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 
 
+class FeatureSchemaError(ValueError):
+    """The request has no features recognizable by the packaged model."""
+
+
 def _media_type(content_type: str) -> str:
     if not isinstance(content_type, str) or not content_type.strip():
         raise ValueError("Missing Content-Type")
