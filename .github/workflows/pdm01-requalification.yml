@@ -1,0 +1,22 @@
+name: PDM01 SageMaker contract requalification
+on:
+  push:
+    branches: [ci/pdm01-contract-requalification]
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - name: Install locked development and serving extras
+        run: uv sync --frozen --extra serve
+      - name: Focused serving contract tests
+        run: uv run --extra serve pytest tests/test_sagemaker_serving_contract.py tests/test_deployment.py tests/test_inference_container.py -q
+      - name: Full repository regression tests
+        run: uv run --extra serve pytest tests/ -q
+      - name: Check source diff whitespace
+        run: git diff --check HEAD~1 HEAD
