@@ -29,6 +29,7 @@ HANDLERS = [unified, container]
 @pytest.mark.parametrize("body,content_type", [
     ('[{"sensor":1.5},{"sensor":2.5}]', "application/json"),
     ('[{"sensor":1.5}]', "Application/JSON; charset=utf-8"),
+    ('{"sensor":[1.5,2.5]}', "application/json"),
     ("sensor\n1.5\n2.5", "text/csv; charset=UTF-8"),
 ])
 def test_valid_json_csv_and_mime_parameters(handler, body, content_type):
@@ -50,6 +51,7 @@ def test_accept_utf8_byte_body(handler):
     ('{"sensor":1}', "application/json", "array of row objects"),
     ("[1,2]", "application/json", "array of row objects"),
     ("[{}]", "application/json", "array of row objects"),
+    ('{"a":[1],"b":[1,2]}', "application/json", "equal lengths"),
     ('[{"sensor":NaN}]', "application/json", "Invalid JSON constant"),
     ("", "text/csv", "CSV request body"),
     ("sensor\n", "text/csv", "data rows"),

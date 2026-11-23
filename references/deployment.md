@@ -180,10 +180,12 @@ print(json.loads(response["Body"].read()))
 
 The SageMaker container's `/invocations` endpoint accepts **UTF-8 JSON row
 records** (`application/json`) or a **headered CSV table** (`text/csv`).
-For JSON, send a **non-empty array of objects**, even for a single observation,
-for example `[{"sensor_a": 0.5, "sensor_b": 1.2}]`. A bare object, scalar,
-empty array, malformed JSON, or header-only CSV receives HTTP 400 with a JSON
-error description. Common Content-Type parameters such as
+For JSON, prefer a **non-empty array of objects**, even for a single
+observation, for example `[{"sensor_a": 0.5, "sensor_b": 1.2}]`.
+The previously supported column-oriented JSON object with equal-length arrays
+(for example `{"sensor_a": [0.5, 0.6]}`) also remains supported for existing
+callers. A bare object with scalar values, empty array, malformed JSON, or
+header-only CSV receives HTTP 400 with a JSON error description. Common Content-Type parameters such as
 `application/json; charset=utf-8` are accepted.
 
 When `code/runtime.py` is packaged, raw columns are transformed first.

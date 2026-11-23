@@ -46,10 +46,22 @@ def parse_request_rows(request_body: str | bytes, content_type: str) -> pd.DataF
             )
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON request body: {exc.msg}") from exc
-        if not (isinstance(rows, list) and rows and
-                all(isinstance(row, dict) and row for row in rows)):
-            raise ValueError("JSON input must be a non-empty array of row objects")
-        frame = pd.DataFrame(rows)
+        if isinstance(rows, list):
+            if not rows or not all(isinstance(row, dict) and row for row in rows):
+                raise ValueError("JSON input must be a non-empty array of row objects")
+            frame = pd.DataFrame(rows)
+        elif isinstance(rows, dict) and rows and all(
+            isinstance(values, list) for values in rows.values()
+        ):
+            # Preserve the pre-existing DataFrame(JSON) column-array format.
+            if len({len(values) for values in rows.values()}) != 1:
+                raise ValueError("JSON column arrays must have equal lengths")
+            frame = pd.DataFrame(rows)
+        else:
+            raise ValueError(
+                "JSON input must be a non-empty array of row objects "
+                "or an object of equal-length column arrays"
+            )
     else:
         try:
             frame = pd.read_csv(StringIO(request_body))
