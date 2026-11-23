@@ -1,0 +1,24 @@
+name: PDM01 final source-preserving validation
+on:
+  push:
+    branches: [ci/pdm01-preservation-validation]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --extra serve
+      - name: Focused serving contracts and existing container integration
+        run: uv run --extra serve pytest tests/test_sagemaker_serving_contract.py tests/test_deployment.py tests/test_inference_container.py -q
+      - name: Entire repository regression suite
+        run: uv run --extra serve pytest tests/ -q
+      - name: Doc and source syntax check
+        run: |
+          uv run --extra serve python -m py_compile pdm/deployment/serving_io.py pdm/deployment/serve.py sagemaker_container/inference.py sagemaker_container/serve.py tests/test_sagemaker_serving_contract.py
+          grep -q 'Endpoint Request/Response Contract' references/deployment.md
+          grep -q 'column-oriented JSON object' references/deployment.md
