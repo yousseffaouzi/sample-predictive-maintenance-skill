@@ -7,6 +7,8 @@ Supports: anomaly_detection, classification, multilabel, rul, survival.
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from pdm.deployment.serving_io import parse_request_rows, serialize_json_response
 
 

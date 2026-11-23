@@ -21,7 +21,7 @@ HANDLERS = [unified, container]
 @pytest.mark.parametrize("body,content_type", [
     ('[{"sensor":1.5},{"sensor":2.5}]', "application/json"),
     ('[{"sensor":1.5}]', "Application/JSON; charset=utf-8"),
-    ("sensor\\n1.5\\n2.5", "text/csv; charset=UTF-8"),
+    ("sensor\n1.5\n2.5", "text/csv; charset=UTF-8"),
 ])
 def test_valid_json_csv_and_mime_parameters(handler, body, content_type):
     frame = handler.input_fn(body, content_type)
@@ -44,8 +44,8 @@ def test_accept_utf8_byte_body(handler):
     ("[{}]", "application/json", "array of row objects"),
     ('[{"sensor":NaN}]', "application/json", "Invalid JSON constant"),
     ("", "text/csv", "CSV request body"),
-    ("sensor\\n", "text/csv", "data rows"),
-    ("sensor\\n1", "application/octet-stream", "Unsupported content type"),
+    ("sensor\n", "text/csv", "data rows"),
+    ("sensor\n1", "application/octet-stream", "Unsupported content type"),
 ])
 def test_bad_input_fails_explicitly(handler, body, content_type, error):
     with pytest.raises(ValueError, match=error):
@@ -57,7 +57,7 @@ def test_missing_content_type_and_non_utf8_body(handler):
     with pytest.raises(ValueError, match="Missing Content-Type"):
         handler.input_fn('[]', None)
     with pytest.raises(ValueError, match="UTF-8"):
-        handler.input_fn(b"\\xff", "application/json")
+        handler.input_fn(b"\xff", "application/json")
 
 
 @pytest.mark.parametrize("handler", HANDLERS, ids=["unified", "container"])
