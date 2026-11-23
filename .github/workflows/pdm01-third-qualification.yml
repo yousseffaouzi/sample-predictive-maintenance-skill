@@ -1,0 +1,19 @@
+name: PDM01 SageMaker contract third qualification
+on:
+  push:
+    branches: [ci/pdm01-contract-round3]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --extra serve
+      - name: Focused SageMaker tests and real slim inference integration
+        run: uv run --extra serve pytest tests/test_sagemaker_serving_contract.py tests/test_deployment.py tests/test_inference_container.py -q
+      - name: Full regression suite
+        run: uv run --extra serve pytest tests/ -q
