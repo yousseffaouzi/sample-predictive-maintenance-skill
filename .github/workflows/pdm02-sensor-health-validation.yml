@@ -1,0 +1,43 @@
+name: PDM02 sensor health validation
+on:
+  push:
+    branches: [ci/pdm02-sensor-health-validation]
+permissions:
+  contents: read
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.5"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1
+      - run: uv sync --frozen --extra serve
+      - name: Reproduce missing sensor false healthy result on upstream baseline
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/pdm-before" c9b39456a7b87256983a2bf14c20092fe82527fe
+          cd "$RUNNER_TEMP/pdm-before"
+          "$GITHUB_WORKSPACE/.venv/bin/python" - <<'PY'
+          import pandas as pd
+          import pdm.monitoring.drift as drift
+          from pdm.monitoring.baseline import capture_baseline
+          assert "pdm-before" in drift.__file__, drift.__file__
+          baselines = capture_baseline(pd.DataFrame({"motor_current": range(100)}), ["motor_current"])
+          for frame in (pd.DataFrame({"unrelated": range(50)}), pd.DataFrame({"motor_current": [None]*50})):
+              report = drift.detect_drift(frame, baselines)
+              assert report.n_features_checked == 0
+              assert report.is_healthy
+              print("REPRODUCED:", report.summary())
+          PY
+      - name: Sensor availability and statistical drift regression tests
+        run: uv run --frozen --extra serve pytest tests/test_monitoring.py -ra
+      - name: Full repository suite
+        run: uv run --frozen --extra serve pytest tests/ -ra
+      - name: Check candidate diff
+        run: |
+          git diff --check c9b39456a7b87256983a2bf14c20092fe82527fe 42a9de9056ed1e01dc7723eeb6b62bd9f17b1503
+          uv run --frozen --extra serve python -m py_compile pdm/monitoring/drift.py pdm/monitoring/__init__.py tests/test_monitoring.py
