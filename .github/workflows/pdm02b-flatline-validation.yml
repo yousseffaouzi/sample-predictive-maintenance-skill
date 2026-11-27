@@ -1,0 +1,27 @@
+name: PDM02B sensor flatline validation
+on:
+  push:
+    branches: [ci/pdm02b-flatline-validation]
+permissions:
+  contents: read
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.5"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1
+      - run: uv sync --frozen --extra serve
+      - name: Sensor flatline and existing drift tests
+        run: uv run --frozen --extra serve pytest tests/test_sensor_flatline.py tests/test_monitoring.py -ra
+      - name: Full repository suite
+        run: uv run --frozen --extra serve pytest tests/ -ra
+      - name: Candidate diff and syntax checks
+        run: |
+          git diff --check c9b39456a7b87256983a2bf14c20092fe82527fe b280634b12e1c1b5b762371385acf337ed2852ba
+          uv run --frozen --extra serve python -m py_compile pdm/monitoring/flatline.py tests/test_sensor_flatline.py
