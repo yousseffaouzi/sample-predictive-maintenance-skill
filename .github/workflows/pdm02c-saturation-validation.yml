@@ -1,0 +1,27 @@
+name: PDM02C ADC saturation validation
+on:
+  push:
+    branches: [ci/pdm02c-adc-saturation-validation]
+permissions:
+  contents: read
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.5"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1
+      - run: uv sync --frozen --extra serve
+      - name: ADC saturation and existing monitoring tests
+        run: uv run --frozen --extra serve pytest tests/test_sensor_saturation.py tests/test_monitoring.py -ra
+      - name: Full repository suite
+        run: uv run --frozen --extra serve pytest tests/ -ra
+      - name: Candidate diff and syntax checks
+        run: |
+          git diff --check c9b39456a7b87256983a2bf14c20092fe82527fe e7da998ec7840d2e4af8fe46d463c8718cfd62e8
+          uv run --frozen --extra serve python -m py_compile pdm/monitoring/saturation.py tests/test_sensor_saturation.py
