@@ -1,0 +1,27 @@
+name: PDM02D current-loop validation
+on:
+  push:
+    branches: [ci/pdm02d-current-loop-validation]
+permissions:
+  contents: read
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.5"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1
+      - run: uv sync --frozen --extra serve
+      - name: Current-loop and existing monitoring tests
+        run: uv run --frozen --extra serve pytest tests/test_current_loop.py tests/test_monitoring.py -ra
+      - name: Full repository suite
+        run: uv run --frozen --extra serve pytest tests/ -ra
+      - name: Candidate diff and syntax checks
+        run: |
+          git diff --check c9b39456a7b87256983a2bf14c20092fe82527fe 84a0666dcd85077ea5ee763cd93ab6d31224f7dc
+          uv run --frozen --extra serve python -m py_compile pdm/monitoring/current_loop.py tests/test_current_loop.py
